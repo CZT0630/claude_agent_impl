@@ -20,77 +20,143 @@ python main.py
 
 ```
 claude_agent_impl/
-├── main.py                 # 入口：配置 + 工具 + 核心循环 + CLI
+├── main.py                 # 入口：组装模块 + CLI
 ├── .env                    # API 配置（不入 git）
 ├── .env.example            # 配置模板
+├── .gitignore
 ├── requirements.txt        # Python 依赖
 ├── README.md               # 本文件
-└── IMPLEMENTATION_PLAN.md  # 完整实现方案（参考用）
+├── IMPLEMENTATION_PLAN.md  # 完整实现方案（参考用）
+│
+├── agent/                  # 核心
+│   ├── __init__.py
+│   ├── config.py           # 配置加载
+│   └── loop.py             # 核心 while 循环
+│
+├── tools/                  # 工具层
+│   ├── __init__.py
+│   ├── registry.py         # 工具注册表 + 分发
+│   ├── bash.py             # bash 工具
+│   └── file_ops.py         # read/write/edit/glob
+│
+└── permissions/            # 权限（待实现）
+    └── __init__.py
+```
+
+## 目标项目结构（全部模块实现后）
+
+```
+claude_agent_impl/
+├── main.py                     # 入口：组装模块 + CLI
+├── .env
+├── .gitignore
+├── requirements.txt
+├── README.md
+├── IMPLEMENTATION_PLAN.md
+│
+├── agent/                      # 核心
+│   ├── __init__.py
+│   ├── config.py               # 配置加载
+│   ├── loop.py                 # 核心 while 循环
+│   └── subagent.py             # s06: 子 Agent 派生
+│
+├── tools/                      # 工具层
+│   ├── __init__.py
+│   ├── registry.py             # 工具注册表 + 分发
+│   ├── bash.py                 # bash 工具
+│   ├── file_ops.py             # read/write/edit/glob
+│   └── todo.py                 # s05: 计划工具
+│
+├── hooks/                      # 扩展点
+│   ├── __init__.py
+│   └── manager.py              # s04: Hook 管理器
+│
+├── permissions/                # 权限管控
+│   ├── __init__.py
+│   └── pipeline.py             # s03: 三级权限管线
+│
+├── memory/                     # 跨会话记忆
+│   ├── __init__.py
+│   └── manager.py              # s09: 记忆管理器
+│
+├── compaction/                 # 上下文压缩
+│   ├── __init__.py
+│   └── pipeline.py             # s08: 四层压缩管线
+│
+├── prompt/                     # Prompt 组装
+│   ├── __init__.py
+│   └── assembler.py            # s10: 动态 Prompt 组装
+│
+├── recovery/                   # 错误恢复
+│   ├── __init__.py
+│   └── handler.py              # s11: 三条恢复路径
+│
+├── skills/                     # 技能加载
+│   ├── __init__.py
+│   ├── loader.py               # s07: 两级按需加载
+│   └── definitions/            # 技能定义文件
+│       ├── agent-builder/SKILL.md
+│       └── code-review/SKILL.md
+│
+├── tasks/                      # 任务系统
+│   ├── __init__.py
+│   └── manager.py              # s12: 持久化任务图
+│
+├── background/                 # 后台任务
+│   ├── __init__.py
+│   └── executor.py             # s13: 线程异步执行
+│
+├── scheduler/                  # 定时调度
+│   ├── __init__.py
+│   └── cron.py                 # s14: Cron 调度器
+│
+├── teams/                      # 多 Agent 协作
+│   ├── __init__.py
+│   ├── bus.py                  # s15: 消息总线
+│   ├── protocols.py            # s16: 团队协议
+│   └── autonomous.py           # s17: 自治 Agent
+│
+├── worktree/                   # 工作区隔离
+│   ├── __init__.py
+│   └── manager.py              # s18: Git Worktree 管理
+│
+├── mcp/                        # MCP 集成
+│   ├── __init__.py
+│   └── client.py               # s19: MCP 客户端
+│
+└── data/                       # 运行时数据（不入 git）
+    ├── memory/                 # s09: 持久记忆文件
+    ├── tasks/                  # s12: 持久化任务
+    ├── mailboxes/              # s15: 队友邮箱
+    ├── worktrees/              # s18: 隔离工作区
+    ├── transcripts/            # s08: 压缩前对话记录
+    └── tool-results/           # s08: 大输出持久化
 ```
 
 ## 实现进度
 
 | 模块 | 文件 | 状态 | 说明 |
 |------|------|------|------|
-| s01 Agent Loop | main.py | ✅ | 核心 while 循环 |
-| s02 Tool Use | main.py | ✅ | 5 个工具 + 分发映射 |
-| s03 Permission | - | ⬜ | 三级权限管线 |
-| s04 Hooks | - | ⬜ | Hook 扩展点 |
-| s05 TodoWrite | - | ⬜ | 计划工具 |
-| s06 Subagent | - | ⬜ | 子 Agent |
-| s07 Skill Loading | - | ⬜ | 技能按需加载 |
-| s08 Context Compact | - | ⬜ | 上下文压缩 |
-| s09 Memory | - | ⬜ | 跨会话记忆 |
-| s10 System Prompt | - | ⬜ | 动态 Prompt 组装 |
-| s11 Error Recovery | - | ⬜ | 错误恢复 |
-| s12 Task System | - | ⬜ | 持久化任务图 |
-| s13 Background Tasks | - | ⬜ | 后台执行 |
-| s14 Cron Scheduler | - | ⬜ | 定时调度 |
-| s15 Agent Teams | - | ⬜ | 多 Agent 协作 |
-| s16 Team Protocols | - | ⬜ | 团队协议 |
-| s17 Autonomous Agents | - | ⬜ | 自治 Agent |
-| s18 Worktree Isolation | - | ⬜ | 工作区隔离 |
-| s19 MCP Plugin | - | ⬜ | MCP 工具集成 |
-| s20 Comprehensive | - | ⬜ | 全机制整合 |
-
-## 目标项目结构
-
-当模块增多后，拆分为模块化结构：
-
-```
-claude_agent_impl/
-├── main.py                 # 入口：组装模块 + CLI
-├── .env
-├── requirements.txt
-├── README.md
-│
-├── agent/
-│   ├── loop.py             # 核心循环
-│   └── config.py           # 配置加载
-│
-├── tools/
-│   ├── registry.py         # 工具注册表 + 分发
-│   ├── bash.py             # bash 工具
-│   └── file_ops.py         # read/write/edit/glob
-│
-├── hooks/
-│   └── manager.py          # Hook 管理器
-│
-├── permissions/
-│   └── pipeline.py         # 权限管线
-│
-├── memory/
-│   └── manager.py          # 跨会话记忆
-│
-├── compaction/
-│   └── pipeline.py         # 上下文压缩
-│
-├── skills/
-│   └── loader.py           # 技能加载
-│
-└── tasks/
-    └── manager.py          # 任务系统
-```
+| s01 Agent Loop | agent/loop.py | ✅ | 核心 while 循环 |
+| s02 Tool Use | tools/*.py | ✅ | 5 个工具 + 分发映射 |
+| s03 Permission | permissions/pipeline.py | ⬜ | 三级权限管线 |
+| s04 Hooks | hooks/manager.py | ⬜ | Hook 扩展点 |
+| s05 TodoWrite | tools/todo.py | ⬜ | 计划工具 |
+| s06 Subagent | agent/subagent.py | ⬜ | 子 Agent |
+| s07 Skill Loading | skills/loader.py | ⬜ | 技能按需加载 |
+| s08 Context Compact | compaction/pipeline.py | ⬜ | 上下文压缩 |
+| s09 Memory | memory/manager.py | ⬜ | 跨会话记忆 |
+| s10 System Prompt | prompt/assembler.py | ⬜ | 动态 Prompt 组装 |
+| s11 Error Recovery | recovery/handler.py | ⬜ | 错误恢复 |
+| s12 Task System | tasks/manager.py | ⬜ | 持久化任务图 |
+| s13 Background Tasks | background/executor.py | ⬜ | 后台执行 |
+| s14 Cron Scheduler | scheduler/cron.py | ⬜ | 定时调度 |
+| s15 Agent Teams | teams/bus.py | ⬜ | 多 Agent 协作 |
+| s16 Team Protocols | teams/protocols.py | ⬜ | 团队协议 |
+| s17 Autonomous Agents | teams/autonomous.py | ⬜ | 自治 Agent |
+| s18 Worktree Isolation | worktree/manager.py | ⬜ | 工作区隔离 |
+| s19 MCP Plugin | mcp/client.py | ⬜ | MCP 工具集成 |
+| s20 Comprehensive | main.py | ⬜ | 全机制整合 |
 
 ## 学习路径
 
@@ -103,12 +169,8 @@ claude_agent_impl/
 阶段六: s19 MCP Plugin → s20 Comprehensive Agent
 ```
 
-## 文档
-
-- [完整实现方案](IMPLEMENTATION_PLAN.md) — 20 个模块的详细设计与代码
-
 ## 运行环境
 
 - Python: 3.12 (tacn)
-- 依赖: anthropic, python-dotenv
+- 依赖: anthropic, python-dotenv, pyyaml
 - 模型: mimo-v2.5-pro (MiMo 兼容提供商)
