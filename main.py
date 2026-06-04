@@ -15,6 +15,7 @@ from tools.file_ops import (
     READ_SCHEMA, WRITE_SCHEMA, EDIT_SCHEMA, GLOB_SCHEMA,
     make_read_handler, make_write_handler, make_edit_handler, make_glob_handler,
 )
+from permissions.pipeline import PermissionPipeline
 
 
 def build_agent(config: Config) -> AgentLoop:
@@ -32,11 +33,14 @@ def build_agent(config: Config) -> AgentLoop:
         "Use tools to solve tasks. Act, don't explain."
     )
 
+    permissions = PermissionPipeline(config.workdir)
+
     return AgentLoop(
         client=client,
         model=config.model,
         system_prompt=system_prompt,
         tool_registry=registry,
+        permission_pipeline=permissions,
         max_tokens=config.max_tokens,
     )
 
