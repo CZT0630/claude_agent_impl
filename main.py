@@ -16,11 +16,13 @@ from tools.file_ops import (
     make_read_handler, make_write_handler, make_edit_handler, make_glob_handler,
 )
 from permissions.pipeline import PermissionPipeline
+from hooks.manager import HookManager
 
 
 def build_agent(config: Config) -> AgentLoop:
     client = Anthropic(api_key=config.api_key, base_url=config.base_url)
 
+    # 注册工具
     registry = ToolRegistry()
     registry.register(**BASH_SCHEMA, handler=make_bash_handler(config.workdir))
     registry.register(**READ_SCHEMA, handler=make_read_handler(config.workdir))
@@ -33,14 +35,35 @@ def build_agent(config: Config) -> AgentLoop:
         "Use tools to solve tasks. Act, don't explain."
     )
 
+    # 配置 hooks
+    hooks = HookManager()
     permissions = PermissionPipeline(config.workdir)
+
+    # PreToolUse: 权限检查
+    def permission_hook(block):
+        return permissions.check(block.name, block.input)
+
+    # PreToolUse: 日志记录
+    def log_hook(block):
+        print(f"\033[90m[hook] {block.name}\033[0m")
+        return None
+
+    # PostToolUse: 大输出警告
+    def large_output_hook(block, output):
+        if len(str(output)) > 10000:
+            print(f"\033[33m[hook] ⚠ Large output from {block.name}: {len(str(output))} chars\033[0m")
+        return None
+
+    hooks.register("PreToolUse", permission_hook)
+    hooks.register("PreToolUse", log_hook)
+    hooks.register("PostToolUse", large_output_hook)
 
     return AgentLoop(
         client=client,
         model=config.model,
         system_prompt=system_prompt,
         tool_registry=registry,
-        permission_pipeline=permissions,
+        hook_manager=hooks,
         max_tokens=config.max_tokens,
     )
 
