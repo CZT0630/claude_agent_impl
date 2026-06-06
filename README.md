@@ -28,6 +28,13 @@ claude_agent_impl/
 ├── README.md               # 本文件
 ├── IMPLEMENTATION_PLAN.md  # 完整实现方案（参考用）
 │
+├── .claude/                # Claude Code 配置目录
+│   ├── skills/             # s07: 技能定义（SKILL.md）
+│   │   ├── code-review/
+│   │   └── agent-builder/
+│   ├── rules/              # 规则（未来）
+│   └── commands/           # 自定义命令（未来）
+│
 ├── agent/                  # 核心
 │   ├── __init__.py
 │   ├── config.py           # 配置加载
@@ -37,10 +44,21 @@ claude_agent_impl/
 │   ├── __init__.py
 │   ├── registry.py         # 工具注册表 + 分发
 │   ├── bash.py             # bash 工具
-│   └── file_ops.py         # read/write/edit/glob
+│   ├── file_ops.py         # read/write/edit/glob
+│   ├── todo.py             # s05: 计划工具
+│   └── subagent.py         # s06: 子 agent
 │
-└── permissions/            # 权限（待实现）
-    └── __init__.py
+├── skills/                 # s07: 技能加载器（Python 模块）
+│   ├── __init__.py
+│   └── loader.py
+│
+├── permissions/            # 权限管控
+│   ├── __init__.py
+│   └── pipeline.py         # s03: 三级权限管线
+│
+└── hooks/                  # 扩展点
+    ├── __init__.py
+    └── manager.py          # s04: Hook 管理器
 ```
 
 ## 目标项目结构（全部模块实现后）
@@ -143,7 +161,7 @@ claude_agent_impl/
 | s04 Hooks | hooks/manager.py | ⬜ | Hook 扩展点 |
 | s05 TodoWrite | tools/todo.py | ⬜ | 计划工具 |
 | s06 Subagent | agent/subagent.py | ⬜ | 子 Agent |
-| s07 Skill Loading | skills/loader.py | ⬜ | 技能按需加载 |
+| s07 Skill Loading | skills/loader.py | ✅ | 两级按需加载 |
 | s08 Context Compact | compaction/pipeline.py | ⬜ | 上下文压缩 |
 | s09 Memory | memory/manager.py | ⬜ | 跨会话记忆 |
 | s10 System Prompt | prompt/assembler.py | ⬜ | 动态 Prompt 组装 |

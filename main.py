@@ -23,6 +23,7 @@ from tools.todo import TODO_SCHEMA, make_todo_handler
 from tools.subagent import TASK_SCHEMA, make_subagent_handler
 from permissions.pipeline import PermissionPipeline
 from hooks.manager import HookManager
+from skills.loader import SkillLoader, LOAD_SKILL_SCHEMA, make_load_skill_handler
 
 
 def build_agent(config: Config) -> AgentLoop:
@@ -36,12 +37,12 @@ def build_agent(config: Config) -> AgentLoop:
     registry.register(**EDIT_SCHEMA, handler=make_edit_handler(config.workdir))
     registry.register(**GLOB_SCHEMA, handler=make_glob_handler(config.workdir))
     registry.register(**TODO_SCHEMA, handler=make_todo_handler())
-    registry.register(**TASK_SCHEMA, handler=make_subagent_handler(
-        client=client,
-        model=config.model,
-        parent_registry=registry,
-        max_tokens=config.max_tokens,
+    registry.register(**TASK_SCHEMA, handler=make_subagent_handler(client=client,model=config.model,parent_registry=registry,
+max_tokens=config.max_tokens,
     ))
+    # s07: 技能加载（两级按需注入）
+    skill_loader = SkillLoader()
+    registry.register(**LOAD_SKILL_SCHEMA, handler=make_load_skill_handler(skill_loader))
 
     system_prompt = (
         f"You are a coding agent at {config.workdir}. "
@@ -51,6 +52,10 @@ def build_agent(config: Config) -> AgentLoop:
         "For complex subtasks, use the task tool to spawn a subagent. "
         "Act, don't explain."
     )
+
+    # Layer 1: 注入技能目录到 SYSTEM prompt（便宜）
+    if skill_loader.has_skills:
+        system_prompt += f"\n\nSkills available:\n{skill_loader.list_skills()}\nUse load_skill(name) to get full details."
 
     # 配置 hooks
     hooks = HookManager()
