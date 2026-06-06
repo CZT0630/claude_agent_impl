@@ -30,9 +30,17 @@ class AgentLoop:
         self.tools = tool_registry
         self.hooks = hook_manager or HookManager()
         self.max_tokens = max_tokens
+        self.rounds_since_todo = 0
 
     def run(self, messages: list) -> list:
         while True:
+            self.rounds_since_todo += 1
+
+            # UserPromptSubmit hook — nag reminder 等
+            injected = self.hooks.trigger("UserPromptSubmit", messages)
+            if injected:
+                messages.append({"role": "user", "content": injected})
+
             # 调用 LLM
             response = self.client.messages.create(
                 model=self.model,
@@ -52,6 +60,10 @@ class AgentLoop:
             results = []
             for block in response.content:
                 if block.type == "tool_use" and hasattr(block, "input"):
+                    # todo_write 调用时重置 nag 计数器
+                    if block.name == "todo_write":
+                        self.rounds_since_todo = 0
+
                     # PreToolUse hook（权限检查在这里）
                     blocked = self.hooks.trigger("PreToolUse", block)
                     if blocked:

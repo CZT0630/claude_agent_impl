@@ -5,6 +5,10 @@ Claude Agent — 入口文件
 组装所有模块，启动交互式 CLI。
 """
 
+import sys
+sys.stdout.reconfigure(encoding="utf-8")  # type: ignore[attr-defined]
+sys.stderr.reconfigure(encoding="utf-8")  # type: ignore[attr-defined]
+
 from anthropic import Anthropic
 
 from agent.config import Config
@@ -15,6 +19,7 @@ from tools.file_ops import (
     READ_SCHEMA, WRITE_SCHEMA, EDIT_SCHEMA, GLOB_SCHEMA,
     make_read_handler, make_write_handler, make_edit_handler, make_glob_handler,
 )
+from tools.todo import TODO_SCHEMA, make_todo_handler
 from permissions.pipeline import PermissionPipeline
 from hooks.manager import HookManager
 
@@ -29,10 +34,13 @@ def build_agent(config: Config) -> AgentLoop:
     registry.register(**WRITE_SCHEMA, handler=make_write_handler(config.workdir))
     registry.register(**EDIT_SCHEMA, handler=make_edit_handler(config.workdir))
     registry.register(**GLOB_SCHEMA, handler=make_glob_handler(config.workdir))
+    registry.register(**TODO_SCHEMA, handler=make_todo_handler())
 
     system_prompt = (
         f"You are a coding agent at {config.workdir}. "
-        "Use tools to solve tasks. Act, don't explain."
+        "Use tools to solve tasks. Plan before execute: "
+        "call todo_write to create a task list first, "
+        "then update it as you progress. Act, don't explain."
     )
 
     # 配置 hooks
@@ -58,7 +66,7 @@ def build_agent(config: Config) -> AgentLoop:
     hooks.register("PreToolUse", log_hook)
     hooks.register("PostToolUse", large_output_hook)
 
-    return AgentLoop(
+    agent = AgentLoop(
         client=client,
         model=config.model,
         system_prompt=system_prompt,
@@ -66,6 +74,17 @@ def build_agent(config: Config) -> AgentLoop:
         hook_manager=hooks,
         max_tokens=config.max_tokens,
     )
+
+    # UserPromptSubmit: nag reminder — 3 轮没更新 todo 就提醒
+    def nag_reminder_hook(_messages):
+        if agent.rounds_since_todo >= 3:
+            agent.rounds_since_todo = 0  # 重置，避免连续提醒
+            return "<reminder>You haven't updated your todo list recently. Call todo_write to update your plan.</reminder>"
+        return None
+
+    hooks.register("UserPromptSubmit", nag_reminder_hook)
+
+    return agent
 
 
 def main():
