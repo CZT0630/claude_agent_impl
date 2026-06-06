@@ -24,6 +24,11 @@ class ToolRegistry:
     def get_definitions(self) -> list[ToolParam]:
         return self._definitions
 
+    def iter_handlers(self):
+        """遍历 (definition, handler) 对，用于构建子 agent 工具集"""
+        for defn in self._definitions:
+            yield defn, self._handlers[defn["name"]]
+
     def execute(self, name: str, args: dict) -> str:
         handler = self._handlers.get(name)
         if not handler:

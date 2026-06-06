@@ -20,6 +20,7 @@ from tools.file_ops import (
     make_read_handler, make_write_handler, make_edit_handler, make_glob_handler,
 )
 from tools.todo import TODO_SCHEMA, make_todo_handler
+from tools.subagent import TASK_SCHEMA, make_subagent_handler
 from permissions.pipeline import PermissionPipeline
 from hooks.manager import HookManager
 
@@ -35,12 +36,20 @@ def build_agent(config: Config) -> AgentLoop:
     registry.register(**EDIT_SCHEMA, handler=make_edit_handler(config.workdir))
     registry.register(**GLOB_SCHEMA, handler=make_glob_handler(config.workdir))
     registry.register(**TODO_SCHEMA, handler=make_todo_handler())
+    registry.register(**TASK_SCHEMA, handler=make_subagent_handler(
+        client=client,
+        model=config.model,
+        parent_registry=registry,
+        max_tokens=config.max_tokens,
+    ))
 
     system_prompt = (
         f"You are a coding agent at {config.workdir}. "
         "Use tools to solve tasks. Plan before execute: "
         "call todo_write to create a task list first, "
-        "then update it as you progress. Act, don't explain."
+        "then update it as you progress. "
+        "For complex subtasks, use the task tool to spawn a subagent. "
+        "Act, don't explain."
     )
 
     # 配置 hooks

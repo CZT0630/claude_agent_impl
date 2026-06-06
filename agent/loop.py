@@ -23,6 +23,7 @@ class AgentLoop:
         tool_registry: ToolRegistry,
         hook_manager: HookManager | None = None,
         max_tokens: int = 8000,
+        max_rounds: int | None = None,
     ):
         self.client = client
         self.model = model
@@ -30,10 +31,11 @@ class AgentLoop:
         self.tools = tool_registry
         self.hooks = hook_manager or HookManager()
         self.max_tokens = max_tokens
+        self.max_rounds = max_rounds
         self.rounds_since_todo = 0
 
     def run(self, messages: list) -> list:
-        while True:
+        for _ in range(self.max_rounds or 10**9):
             self.rounds_since_todo += 1
 
             # UserPromptSubmit hook — nag reminder 等
@@ -93,3 +95,4 @@ class AgentLoop:
                         "content": output,
                     })
             messages.append({"role": "user", "content": results})
+        return messages
