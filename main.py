@@ -24,6 +24,7 @@ from tools.subagent import TASK_SCHEMA, make_subagent_handler
 from permissions.pipeline import PermissionPipeline
 from hooks.manager import HookManager
 from skills.loader import SkillLoader, LOAD_SKILL_SCHEMA, make_load_skill_handler
+from context.compact import CompactPipeline
 
 
 def build_agent(config: Config) -> AgentLoop:
@@ -57,6 +58,13 @@ max_tokens=config.max_tokens,
     if skill_loader.has_skills:
         system_prompt += f"\n\nSkills available:\n{skill_loader.list_skills()}\nUse load_skill(name) to get full details."
 
+    # s08: 四层上下文压缩管线
+    compact_pipeline = CompactPipeline(
+        client=client,
+        model=config.model,
+        workdir=config.workdir,
+    )
+
     # 配置 hooks
     hooks = HookManager()
     permissions = PermissionPipeline(config.workdir)
@@ -86,6 +94,7 @@ max_tokens=config.max_tokens,
         system_prompt=system_prompt,
         tool_registry=registry,
         hook_manager=hooks,
+        compact_pipeline=compact_pipeline,
         max_tokens=config.max_tokens,
     )
 

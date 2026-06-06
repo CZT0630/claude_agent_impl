@@ -3,6 +3,7 @@ Agent 核心循环 — 整个 agent 的心脏
 
 模式:
     while stop_reason == "tool_use":
+        compact(messages)        ← s08: 四层压缩管线
         response = LLM(messages, tools)
         trigger hooks
         execute tools
@@ -12,6 +13,7 @@ Agent 核心循环 — 整个 agent 的心脏
 from anthropic import Anthropic
 from tools.registry import ToolRegistry
 from hooks.manager import HookManager
+from context.compact import CompactPipeline
 
 
 class AgentLoop:
@@ -22,6 +24,7 @@ class AgentLoop:
         system_prompt: str,
         tool_registry: ToolRegistry,
         hook_manager: HookManager | None = None,
+        compact_pipeline: CompactPipeline | None = None,
         max_tokens: int = 8000,
         max_rounds: int | None = None,
     ):
@@ -30,6 +33,7 @@ class AgentLoop:
         self.system_prompt = system_prompt
         self.tools = tool_registry
         self.hooks = hook_manager or HookManager()
+        self.compact = compact_pipeline
         self.max_tokens = max_tokens
         self.max_rounds = max_rounds
         self.rounds_since_todo = 0
@@ -38,19 +42,38 @@ class AgentLoop:
         for _ in range(self.max_rounds or 10**9):
             self.rounds_since_todo += 1
 
+            # s08: 四层压缩管线 (budget → snip → micro → auto)
+            if self.compact:
+                self.compact.run(messages)
+
             # UserPromptSubmit hook — nag reminder 等
             injected = self.hooks.trigger("UserPromptSubmit", messages)
             if injected:
                 messages.append({"role": "user", "content": injected})
 
-            # 调用 LLM
-            response = self.client.messages.create(
-                model=self.model,
-                system=self.system_prompt,
-                messages=messages,
-                tools=self.tools.get_definitions(),
-                max_tokens=self.max_tokens,
-            )
+            # 调用 LLM (带 prompt_too_long 紧急恢复)
+            try:
+                response = self.client.messages.create(
+                    model=self.model,
+                    system=self.system_prompt,
+                    messages=messages,
+                    tools=self.tools.get_definitions(),
+                    max_tokens=self.max_tokens,
+                )
+            except Exception as e:
+                if "prompt_too_long" in str(e).lower() and self.compact:
+                    print(f"\033[33m[compact] prompt_too_long, running reactive compact...\033[0m")
+                    self.compact.reactive_compact(messages)
+                    response = self.client.messages.create(
+                        model=self.model,
+                        system=self.system_prompt,
+                        messages=messages,
+                        tools=self.tools.get_definitions(),
+                        max_tokens=self.max_tokens,
+                    )
+                else:
+                    raise
+
             messages.append({"role": "assistant", "content": response.content})
 
             # stop_reason: "tool_use"=调工具 / "end_turn"=结束
@@ -79,6 +102,10 @@ class AgentLoop:
 
                     # 执行工具
                     output = self.tools.execute(block.name, block.input)
+
+                    # s08: 大输出持久化
+                    if self.compact:
+                        output = self.compact.truncate_output(str(output), block.id)
 
                     # PostToolUse hook
                     self.hooks.trigger("PostToolUse", block, output)
