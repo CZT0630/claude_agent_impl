@@ -25,6 +25,7 @@ from permissions.pipeline import PermissionPipeline
 from hooks.manager import HookManager
 from skills.loader import SkillLoader, LOAD_SKILL_SCHEMA, make_load_skill_handler
 from context.compact import CompactPipeline
+from memory.manager import MemoryManager
 
 
 def build_agent(config: Config) -> AgentLoop:
@@ -65,6 +66,13 @@ max_tokens=config.max_tokens,
         workdir=config.workdir,
     )
 
+    # s09: 跨会话持久记忆 (~/.claude/projects/{project_key}/memory/)
+    memory_manager = MemoryManager(
+        client=client,
+        model=config.model,
+        workdir=config.workdir,
+    )
+
     # 配置 hooks
     hooks = HookManager()
     permissions = PermissionPipeline(config.workdir)
@@ -95,6 +103,7 @@ max_tokens=config.max_tokens,
         tool_registry=registry,
         hook_manager=hooks,
         compact_pipeline=compact_pipeline,
+        memory_manager=memory_manager,
         max_tokens=config.max_tokens,
     )
 

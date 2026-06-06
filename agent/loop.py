@@ -14,6 +14,7 @@ from anthropic import Anthropic
 from tools.registry import ToolRegistry
 from hooks.manager import HookManager
 from context.compact import CompactPipeline
+from memory.manager import MemoryManager
 
 
 class AgentLoop:
@@ -25,6 +26,7 @@ class AgentLoop:
         tool_registry: ToolRegistry,
         hook_manager: HookManager | None = None,
         compact_pipeline: CompactPipeline | None = None,
+        memory_manager: MemoryManager | None = None,
         max_tokens: int = 8000,
         max_rounds: int | None = None,
     ):
@@ -34,6 +36,7 @@ class AgentLoop:
         self.tools = tool_registry
         self.hooks = hook_manager or HookManager()
         self.compact = compact_pipeline
+        self.memory = memory_manager
         self.max_tokens = max_tokens
         self.max_rounds = max_rounds
         self.rounds_since_todo = 0
@@ -45,6 +48,13 @@ class AgentLoop:
             # s08: 四层压缩管线 (budget → snip → micro → auto)
             if self.compact:
                 self.compact.run(messages)
+
+            # s09: 选择相关记忆注入上下文（在压缩之后、LLM 调用之前）
+            memory_context = ""
+            if self.memory:
+                memory_context = self.memory.select(messages)
+                if memory_context:
+                    messages.append({"role": "user", "content": memory_context})
 
             # UserPromptSubmit hook — nag reminder 等
             injected = self.hooks.trigger("UserPromptSubmit", messages)
@@ -79,6 +89,17 @@ class AgentLoop:
             # stop_reason: "tool_use"=调工具 / "end_turn"=结束
             if response.stop_reason != "tool_use":
                 self.hooks.trigger("Stop", messages)
+
+                # s09: 对话结束时提取新记忆
+                if self.memory:
+                    new_memories = self.memory.extract(messages)
+                    if new_memories:
+                        print(f"\033[36m[memory] saved {len(new_memories)} new memory(ies): {', '.join(new_memories)}\033[0m")
+                        # 记忆数达到阈值时触发整理
+                        remaining = self.memory.consolidate()
+                        if remaining < self.memory.memory_count + len(new_memories):
+                            print(f"\033[36m[memory] consolidated → {remaining} memories\033[0m")
+
                 return messages
 
             # 执行工具调用
