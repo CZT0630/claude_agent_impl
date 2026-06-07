@@ -164,7 +164,7 @@ claude_agent_impl/
 | s07 Skill Loading | skills/loader.py | ✅ | 两级按需加载 |
 | s08 Context Compact | compaction/pipeline.py | ⬜ | 上下文压缩 |
 | s09 Memory | memory/manager.py | ⬜ | 跨会话记忆 |
-| s10 System Prompt | prompt/assembler.py | ⬜ | 动态 Prompt 组装 |
+| s10 System Prompt | prompt/assembler.py | ✅ | 动态 Prompt 组装 |
 | s11 Error Recovery | recovery/handler.py | ⬜ | 错误恢复 |
 | s12 Task System | tasks/manager.py | ⬜ | 持久化任务图 |
 | s13 Background Tasks | background/executor.py | ⬜ | 后台执行 |

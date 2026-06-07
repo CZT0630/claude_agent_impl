@@ -4,6 +4,7 @@ Agent 核心循环 — 整个 agent 的心脏
 模式:
     while stop_reason == "tool_use":
         compact(messages)        ← s08: 四层压缩管线
+        system = assemble(ctx)   ← s10: 动态 prompt 组装
         response = LLM(messages, tools)
         trigger hooks
         execute tools
@@ -15,6 +16,7 @@ from tools.registry import ToolRegistry
 from hooks.manager import HookManager
 from context.compact import CompactPipeline
 from memory.manager import MemoryManager
+from prompt.assembler import PromptAssembler
 
 
 class AgentLoop:
@@ -22,7 +24,7 @@ class AgentLoop:
         self,
         client: Anthropic,
         model: str,
-        system_prompt: str,
+        system_prompt: str | PromptAssembler,
         tool_registry: ToolRegistry,
         hook_manager: HookManager | None = None,
         compact_pipeline: CompactPipeline | None = None,
@@ -41,6 +43,27 @@ class AgentLoop:
         self.max_rounds = max_rounds
         self.rounds_since_todo = 0
 
+        # s10: 支持动态 PromptAssembler 或静态字符串
+        if isinstance(system_prompt, PromptAssembler):
+            self._assembler = system_prompt
+            self._static_prompt = None
+        else:
+            self._assembler = None
+            self._static_prompt = system_prompt
+
+    def _get_system_prompt(self, context: dict | None = None) -> str:
+        """获取当前 system prompt（动态组装或静态返回）"""
+        if self._assembler:
+            return self._assembler.assemble(context or {})
+        return self._static_prompt or ""
+
+    def _build_prompt_context(self, memory_context: str = "") -> dict:
+        """构建给 PromptAssembler 的上下文字典"""
+        return {
+            "has_memories": bool(self.memory and self.memory.has_memories),
+            "memory_context": memory_context,
+        }
+
     def run(self, messages: list) -> list:
         for _ in range(self.max_rounds or 10**9):
             self.rounds_since_todo += 1
@@ -56,6 +79,10 @@ class AgentLoop:
                 if memory_context:
                     messages.append({"role": "user", "content": memory_context})
 
+            # s10: 动态组装 system prompt
+            prompt_ctx = self._build_prompt_context(memory_context)
+            system_prompt = self._get_system_prompt(prompt_ctx)
+
             # UserPromptSubmit hook — nag reminder 等
             injected = self.hooks.trigger("UserPromptSubmit", messages)
             if injected:
@@ -65,7 +92,7 @@ class AgentLoop:
             try:
                 response = self.client.messages.create(
                     model=self.model,
-                    system=self.system_prompt,
+                    system=system_prompt,
                     messages=messages,
                     tools=self.tools.get_definitions(),
                     max_tokens=self.max_tokens,
@@ -76,7 +103,7 @@ class AgentLoop:
                     self.compact.reactive_compact(messages)
                     response = self.client.messages.create(
                         model=self.model,
-                        system=self.system_prompt,
+                        system=system_prompt,
                         messages=messages,
                         tools=self.tools.get_definitions(),
                         max_tokens=self.max_tokens,

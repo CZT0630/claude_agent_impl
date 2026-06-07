@@ -26,6 +26,7 @@ from hooks.manager import HookManager
 from skills.loader import SkillLoader, LOAD_SKILL_SCHEMA, make_load_skill_handler
 from context.compact import CompactPipeline
 from memory.manager import MemoryManager
+from prompt.assembler import PromptAssembler
 
 
 def build_agent(config: Config) -> AgentLoop:
@@ -46,18 +47,42 @@ max_tokens=config.max_tokens,
     skill_loader = SkillLoader()
     registry.register(**LOAD_SKILL_SCHEMA, handler=make_load_skill_handler(skill_loader))
 
-    system_prompt = (
-        f"You are a coding agent at {config.workdir}. "
-        "Use tools to solve tasks. Plan before execute: "
-        "call todo_write to create a task list first, "
-        "then update it as you progress. "
-        "For complex subtasks, use the task tool to spawn a subagent. "
-        "Act, don't explain."
+    # s10: 动态 Prompt 组装 — 段落注册表 + 条件加载
+    assembler = PromptAssembler()
+    assembler.register(
+        "identity",
+        f"You are a coding agent at {config.workdir}.",
+        priority=0,
     )
-
-    # Layer 1: 注入技能目录到 SYSTEM prompt（便宜）
-    if skill_loader.has_skills:
-        system_prompt += f"\n\nSkills available:\n{skill_loader.list_skills()}\nUse load_skill(name) to get full details."
+    assembler.register(
+        "behavior",
+        (
+            "Use tools to solve tasks. Plan before execute: "
+            "call todo_write to create a task list first, "
+            "then update it as you progress. "
+            "For complex subtasks, use the task tool to spawn a subagent. "
+            "Act, don't explain."
+        ),
+        priority=10,
+    )
+    assembler.register(
+        "skills",
+        lambda ctx: (
+            f"Skills available:\n{skill_loader.list_skills()}\n"
+            "Use load_skill(name) to get full details."
+        ),
+        condition=lambda ctx: skill_loader.has_skills,
+        priority=20,
+    )
+    assembler.register(
+        "memory",
+        lambda ctx: (
+            "Relevant memories are injected below when available. "
+            "Use them to personalize your behavior."
+        ),
+        condition=lambda ctx: ctx.get("has_memories", False),
+        priority=30,
+    )
 
     # s08: 四层上下文压缩管线
     compact_pipeline = CompactPipeline(
@@ -99,7 +124,7 @@ max_tokens=config.max_tokens,
     agent = AgentLoop(
         client=client,
         model=config.model,
-        system_prompt=system_prompt,
+        system_prompt=assembler,
         tool_registry=registry,
         hook_manager=hooks,
         compact_pipeline=compact_pipeline,
