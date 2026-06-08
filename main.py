@@ -21,6 +21,11 @@ from tools.file_ops import (
 )
 from tools.todo import TODO_SCHEMA, make_todo_handler
 from tools.subagent import TASK_SCHEMA, make_subagent_handler
+from tools.task import (
+    CREATE_TASK_SCHEMA, LIST_TASKS_SCHEMA, GET_TASK_SCHEMA,
+    CLAIM_TASK_SCHEMA, COMPLETE_TASK_SCHEMA,
+    TaskStore, make_task_handlers,
+)
 from permissions.pipeline import PermissionPipeline
 from hooks.manager import HookManager
 from skills.loader import SkillLoader, LOAD_SKILL_SCHEMA, make_load_skill_handler
@@ -43,6 +48,15 @@ def build_agent(config: Config) -> AgentLoop:
     registry.register(**TASK_SCHEMA, handler=make_subagent_handler(client=client,model=config.model,parent_registry=registry,
 max_tokens=config.max_tokens,
     ))
+    # s12: 任务系统（文件持久化的任务图，支持依赖关系）
+    task_store = TaskStore(config.workdir / ".tasks")
+    task_handlers = make_task_handlers(task_store)
+    registry.register(**CREATE_TASK_SCHEMA, handler=task_handlers["create_task"])
+    registry.register(**LIST_TASKS_SCHEMA, handler=task_handlers["list_tasks"])
+    registry.register(**GET_TASK_SCHEMA, handler=task_handlers["get_task"])
+    registry.register(**CLAIM_TASK_SCHEMA, handler=task_handlers["claim_task"])
+    registry.register(**COMPLETE_TASK_SCHEMA, handler=task_handlers["complete_task"])
+
     # s07: 技能加载（两级按需注入）
     skill_loader = SkillLoader()
     registry.register(**LOAD_SKILL_SCHEMA, handler=make_load_skill_handler(skill_loader))
@@ -60,6 +74,8 @@ max_tokens=config.max_tokens,
             "Use tools to solve tasks. Plan before execute: "
             "call todo_write to create a task list first, "
             "then update it as you progress. "
+            "For persistent tasks, use create_task/list_tasks/complete_task "
+            "to manage a task board that survives across sessions. "
             "For complex subtasks, use the task tool to spawn a subagent. "
             "Act, don't explain."
         ),
