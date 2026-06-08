@@ -15,6 +15,7 @@ class Config:
     base_url: str | None
     workdir: Path
     max_tokens: int = 8000
+    fallback_model: str | None = None
 
     @classmethod
     def from_env(cls, env_path: Path | None = None) -> "Config":
@@ -28,6 +29,7 @@ class Config:
         base_url = os.getenv("ANTHROPIC_BASE_URL")
         workdir = Path.cwd()
         max_tokens = int(os.getenv("MAX_TOKENS", "8000"))
+        fallback_model = os.getenv("FALLBACK_MODEL") or None
 
         if not api_key:
             raise ValueError("ANTHROPIC_API_KEY not set in .env")
@@ -38,4 +40,5 @@ class Config:
             base_url=base_url,
             workdir=workdir,
             max_tokens=max_tokens,
+            fallback_model=fallback_model,
         )

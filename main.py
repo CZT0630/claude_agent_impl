@@ -130,6 +130,7 @@ max_tokens=config.max_tokens,
         compact_pipeline=compact_pipeline,
         memory_manager=memory_manager,
         max_tokens=config.max_tokens,
+        fallback_model=config.fallback_model,
     )
 
     # UserPromptSubmit: nag reminder — 3 轮没更新 todo 就提醒

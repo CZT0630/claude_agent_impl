@@ -5,7 +5,7 @@ Agent 核心循环 — 整个 agent 的心脏
     while stop_reason == "tool_use":
         compact(messages)        ← s08: 四层压缩管线
         system = assemble(ctx)   ← s10: 动态 prompt 组装
-        response = LLM(messages, tools)
+        response = LLM(messages, tools)   ← s11: 带错误恢复
         trigger hooks
         execute tools
         append results
@@ -17,6 +17,14 @@ from hooks.manager import HookManager
 from context.compact import CompactPipeline
 from memory.manager import MemoryManager
 from prompt.assembler import PromptAssembler
+from agent.recovery import (
+    RecoveryState,
+    handle_max_tokens,
+    handle_prompt_too_long,
+    handle_rate_limit,
+    should_switch_fallback,
+    classify_error,
+)
 
 
 class AgentLoop:
@@ -31,10 +39,10 @@ class AgentLoop:
         memory_manager: MemoryManager | None = None,
         max_tokens: int = 8000,
         max_rounds: int | None = None,
+        fallback_model: str | None = None,
     ):
         self.client = client
         self.model = model
-        self.system_prompt = system_prompt
         self.tools = tool_registry
         self.hooks = hook_manager or HookManager()
         self.compact = compact_pipeline
@@ -42,6 +50,10 @@ class AgentLoop:
         self.max_tokens = max_tokens
         self.max_rounds = max_rounds
         self.rounds_since_todo = 0
+
+        # s11: 错误恢复状态
+        self.recovery = RecoveryState()
+        self.fallback_model = fallback_model
 
         # s10: 支持动态 PromptAssembler 或静态字符串
         if isinstance(system_prompt, PromptAssembler):
@@ -63,6 +75,98 @@ class AgentLoop:
             "has_memories": bool(self.memory and self.memory.has_memories),
             "memory_context": memory_context,
         }
+
+    def _get_current_model(self) -> str:
+        """返回当前应使用的模型（可能因 fallback 切换）"""
+        if self.fallback_model and should_switch_fallback(self.recovery):
+            return self.fallback_model
+        return self.model
+
+    # ── 核心 LLM 调用（带恢复） ────────────────────────────────────
+
+    def _call_llm(self, system_prompt: str, messages: list):
+        """
+        调用 LLM，内置三条恢复路径。
+
+        Path 1: max_tokens   → 升级 token + continuation prompt
+        Path 2: prompt_too_long → reactive compact
+        Path 3: 429/529      → 指数退避重试
+
+        Returns:
+            response 对象
+
+        Raises:
+            Exception: 所有恢复路径用尽后仍失败
+        """
+        current_max = self.max_tokens
+
+        while True:
+            model = self._get_current_model()
+
+            try:
+                response = self.client.messages.create(
+                    model=model,
+                    system=system_prompt,
+                    messages=messages,
+                    tools=self.tools.get_definitions(),
+                    max_tokens=current_max,
+                )
+
+                # 调用成功，重置 529 计数
+                self.recovery.on_success()
+
+                # ── Path 1: max_tokens 截断 ──
+                if response.stop_reason == "max_tokens":
+                    new_max, should_retry = handle_max_tokens(
+                        self.recovery, messages, current_max,
+                    )
+                    if should_retry:
+                        current_max = new_max
+                        print(f"\033[33m[recovery] max_tokens hit, "
+                              f"escalated to {current_max}, "
+                              f"continuation={self.recovery.continuation_count}\033[0m")
+                        continue
+                    # 恢复用尽，返回当前 response
+                    return response
+
+                # 正常返回
+                return response
+
+            except Exception as e:
+                error_type = classify_error(e)
+
+                # ── Path 2: prompt_too_long ──
+                if error_type == "prompt_too_long":
+                    should_retry = handle_prompt_too_long(
+                        self.recovery, self.compact, messages,
+                    )
+                    if should_retry:
+                        print(f"\033[33m[recovery] prompt_too_long, "
+                              f"reactive compact done, retrying...\033[0m")
+                        continue
+                    raise
+
+                # ── Path 3: 速率限制 ──
+                if error_type in ("rate_limit_429", "rate_limit_529"):
+                    is_529 = (error_type == "rate_limit_529")
+                    should_retry = handle_rate_limit(self.recovery, is_529)
+
+                    if should_switch_fallback(self.recovery) and self.fallback_model:
+                        print(f"\033[31m[recovery] too many 529s, "
+                              f"switching to fallback: {self.fallback_model}\033[0m")
+                        continue  # 下一轮会用 fallback_model
+
+                    if should_retry:
+                        print(f"\033[33m[recovery] {error_type}, "
+                              f"retry {self.recovery.retry_count}/{10}, "
+                              f"waiting...\033[0m")
+                        continue
+                    raise
+
+                # 未知错误，不恢复
+                raise
+
+    # ── 主循环 ─────────────────────────────────────────────────────
 
     def run(self, messages: list) -> list:
         for _ in range(self.max_rounds or 10**9):
@@ -88,28 +192,8 @@ class AgentLoop:
             if injected:
                 messages.append({"role": "user", "content": injected})
 
-            # 调用 LLM (带 prompt_too_long 紧急恢复)
-            try:
-                response = self.client.messages.create(
-                    model=self.model,
-                    system=system_prompt,
-                    messages=messages,
-                    tools=self.tools.get_definitions(),
-                    max_tokens=self.max_tokens,
-                )
-            except Exception as e:
-                if "prompt_too_long" in str(e).lower() and self.compact:
-                    print(f"\033[33m[compact] prompt_too_long, running reactive compact...\033[0m")
-                    self.compact.reactive_compact(messages)
-                    response = self.client.messages.create(
-                        model=self.model,
-                        system=system_prompt,
-                        messages=messages,
-                        tools=self.tools.get_definitions(),
-                        max_tokens=self.max_tokens,
-                    )
-                else:
-                    raise
+            # s11: 调用 LLM（带三条恢复路径）
+            response = self._call_llm(system_prompt, messages)
 
             messages.append({"role": "assistant", "content": response.content})
 
