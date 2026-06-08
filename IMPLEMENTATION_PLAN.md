@@ -55,7 +55,7 @@ MODEL_ID=claude-sonnet-4-6
 
 ---
 
-## 六大阶段 · 20 个模块 总览
+## 九大阶段 · 28 个模块 总览
 
 ```
 阶段一: 让 Agent 能动手          s01 → s02 → s03 → s04
@@ -64,6 +64,9 @@ MODEL_ID=claude-sonnet-4-6
 阶段四: 让任务长期运行           s12 → s13 → s14
 阶段五: 让多个 Agent 协作        s15 → s16 → s17 → s18
 阶段六: 接外部能力合体           s19 → s20
+阶段七: 安全加固                 s21 → s22
+阶段八: 工具生态扩展             s23 → s24 → s25
+阶段九: 会话与交互               s26 → s27 → s28
 ```
 
 ---
@@ -1095,6 +1098,349 @@ def assemble_tool_pool(builtin_tools, mcp_connections):
 
 ---
 
+## 阶段七：安全加固（s21-s22）
+
+### s21 Command Sandbox — "命令在笼子里跑"
+
+**目标**: 在 `run_bash` 层面插入进程级隔离，Agent 即使被 prompt injection 操纵也无法破坏宿主机
+
+**三级沙箱策略**:
+
+```
+Level 0 (当前): subprocess.run(shell=True) ← 宿主机裸跑
+
+Level 1 (轻量): subprocess + 环境限制
+    → env 清空敏感变量 (SSH_KEY, AWS_SECRET, ...)
+    → 工作目录 chdir 锁定
+    → resource 模块限制 CPU/内存/文件大小
+
+Level 2 (容器): Docker 容器执行
+    → docker run --rm -v workdir:/work -w /work
+    → --network=none (可选禁网)
+    → --memory=512m --cpus=1 --pids-limit=256
+```
+
+**架构**:
+
+```
+agent_loop
+    ↓ tool_use: bash(command)
+    ↓
+Sandbox.execute(command)
+    ├─ Level 0 → subprocess.run(shell=True)          ← 原始行为
+    ├─ Level 1 → subprocess.run(env=clean_env, ...)   ← 受限子进程
+    └─ Level 2 → docker run ... sh -c command         ← 容器隔离
+```
+
+**配置**: `SANDBOX_LEVEL=0|1|2` 通过 `.env` 或命令行参数控制
+
+**关键概念**:
+- 只改 `tools/bash.py` 的 `make_bash_handler`，将 `Sandbox.execute()` 替代 `subprocess.run()`，其他模块零改动
+- Level 1 通过 `env` 清空 + `resource` 限制实现轻量隔离（无需 Docker）
+- Level 2 通过 `--network=none` 实现网络隔离，`--memory` 防内存炸弹
+- `preexec_fn=set_limits` 在子进程中设置资源限制，不影响主进程
+
+**新增文件**: `s21_sandbox/code.py`, `s21_sandbox/Dockerfile`
+
+---
+
+### s22 Permission Modes — "该问的问，不该问的别问"
+
+**目标**: 多级权限模式，平衡安全和效率
+
+**三种模式**:
+
+```
+Mode 1: ask (当前行为)
+  → 危险操作问用户 y/N
+
+Mode 2: auto-accept (全允许)
+  → 跳过所有 Gate 2/3 检查，调试/可信环境用
+
+Mode 3: allowed-tools (白名单)
+  → 只允许指定工具自动执行，其余仍需确认
+  → 例: "bash:read, read_file, glob" = 读操作自动放行
+```
+
+**Slash 命令集成**:
+```
+/permissions ask              → 切换到 ask 模式
+/permissions auto             → 切换到 auto-accept
+/permissions allow bash:read  → bash 的读操作自动允许
+/permissions status           → 查看当前模式和白名单
+```
+
+**关键概念**:
+- Gate 1 硬拒绝**始终生效**，auto-accept 也不能绕过
+- 白名单格式 `tool:pattern`，如 `bash:read` 表示包含 "read" 的 bash 命令自动放行
+- 与 s03 的 PermissionPipeline 是**同一类的扩展**，替换而非新增
+
+**新增文件**: `s22_permission_modes/code.py`
+
+---
+
+## 阶段八：工具生态扩展（s23-s25）
+
+### s23 Code Search & Git — "在代码里找东西，管版本"
+
+**目标**: 添加 grep 代码搜索 + git 操作工具集
+
+**新增工具**:
+
+| 工具 | 功能 | Claude Code 对应 |
+|------|------|-----------------|
+| `grep` | 正则搜索文件内容（ripgrep 驱动） | `Grep` |
+| `git_status` | 显示工作区状态 | 内置 git 集成 |
+| `git_diff` | 显示变更差异 | 同上 |
+| `git_log` | 显示提交历史 | 同上 |
+| `git_commit` | 提交变更 | 同上 |
+| `git_branch` | 分支操作（创建/切换/列出） | 同上 |
+
+**grep 工具接口**:
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `pattern` | string | ✅ | 正则表达式 |
+| `path` | string | — | 搜索目录或文件，默认 "." |
+| `glob` | string | — | 文件过滤，如 "*.py" |
+| `context` | int | — | 匹配行前后显示的上下文行数 |
+
+**git_diff 工具接口**:
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `path` | string | — | 文件或目录 |
+| `staged` | boolean | — | 是否显示暂存区变更 |
+
+**关键概念**:
+- `grep` 调用 ripgrep (`rg`)，需预装；找不到时 fallback 到 Python `re` 模块扫描
+- git 工具走 `subprocess.run(["git", ...])`，不走 shell，避免注入风险
+- `git_commit` 受权限管线控制（Gate 2: 写操作需确认）
+- 所有输出截断到 50000 字符，与 s08 L3 budget 对齐
+
+**新增文件**: `s23_code_search/code.py`
+
+---
+
+### s24 Web Tools — "连上互联网"
+
+**目标**: Web 搜索 + 页面抓取，让 Agent 能查阅文档、搜索解决方案
+
+**新增工具**:
+
+| 工具 | 功能 | Claude Code 对应 |
+|------|------|-----------------|
+| `web_search` | 搜索引擎查询 | `WebSearch` |
+| `web_fetch` | 抓取 URL 内容，转为文本/Markdown | `WebFetch` |
+
+**架构**:
+
+```
+web_search("query")  → 搜索 API (Brave/SerpAPI) → 标题 + URL + 摘要
+web_fetch(url)       → httpx.get → HTML → 文本/Markdown → 截断 50000 字符
+```
+
+**web_search 接口**:
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `query` | string | ✅ | 搜索关键词 |
+| `max_results` | int | — | 最大结果数，默认 5 |
+
+**web_fetch 接口**:
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `url` | string | ✅ | 目标 URL |
+| `format` | string | — | "text"（默认）或 "markdown" |
+
+**配置**: `SEARCH_API_KEY` 通过 `.env` 配置（Brave/SerpAPI key）
+
+**关键概念**:
+- `web_search` 需要搜索 API key，`web_fetch` 直接 HTTP GET 不需要额外 key
+- HTML → Markdown 可用 `markdownify` 或 `html2text` 库
+- `web_fetch` 应加入权限管线：检查 URL 是否在内网（防 SSRF）
+
+**新增文件**: `s24_web_tools/code.py`
+
+---
+
+### s25 Multimedia & Notebook — "不只看文本"
+
+**目标**: 多模态读取（图片/PDF）+ Jupyter Notebook 支持
+
+**新增工具**:
+
+| 工具 | 功能 | Claude Code 对应 |
+|------|------|-----------------|
+| `read_image` | 读取图片，返回 vision content block | `Read` (images) |
+| `read_pdf` | 读取 PDF 指定页面，转为文本 | `Read` (PDFs) |
+| `notebook_read` | 读取 .ipynb 为 cell 结构 | `Read` (notebooks) |
+| `notebook_edit` | 编辑 notebook 中的 cell | `NotebookEdit` |
+
+**read_image 接口**:
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `path` | string | ✅ | 图片路径（png/jpg/gif/webp） |
+
+返回 Anthropic vision 格式的 `image` content block（base64 编码），非纯文本。
+
+**read_pdf 接口**:
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `path` | string | ✅ | PDF 路径 |
+| `pages` | string | — | 页码范围，如 "1-5", "3", "1-3,7" |
+
+**notebook_edit 接口**:
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `path` | string | ✅ | .ipynb 路径 |
+| `cell_index` | int | ✅ | Cell 索引（0-based） |
+| `source` | string | ✅ | 新的 cell 内容 |
+| `cell_type` | string | — | "code" 或 "markdown" |
+
+**关键概念**:
+- 图片通过 Anthropic vision API 发送，需在 `agent/loop.py` 中支持 image content block
+- PDF 用 `PyMuPDF` (`fitz`) 提取文本，需 `pip install pymupdf`
+- Notebook 本质是 JSON，直接解析 `cells` 数组
+- 图片大小限制 20MB，PDF 页数限制 20 页
+
+**新增文件**: `s25_multimedia/code.py`
+
+---
+
+## 阶段九：会话与交互（s26-s28）
+
+### s26 Session Management — "退出了还能回来"
+
+**目标**: 会话持久化 + 恢复 + Token 成本追踪
+
+**会话存储结构**:
+
+```
+.sessions/
+  {session_id}.jsonl      ← 完整消息记录（每行一条 JSON message）
+  {session_id}.meta.json  ← 元数据（创建时间、模型、token 用量）
+  latest                   ← 文本文件，记录最近一次 session_id
+```
+
+**SessionManager 接口**:
+
+| 方法 | 说明 |
+|------|------|
+| `create(session_id?)` | 创建新会话，返回 session_id |
+| `save_turn(session_id, message)` | 追加一条消息到 JSONL |
+| `load(session_id)` | 从 JSONL 恢复完整对话 |
+| `list_sessions()` | 列出所有会话（按时间倒序） |
+| `get_latest()` | 获取最近一次会话 ID |
+
+**TokenTracker 接口**:
+
+| 方法 | 说明 |
+|------|------|
+| `record(model, usage)` | 记录一次 LLM 调用的 token 用量 |
+| `cost(model)` | 计算累计费用 (USD) |
+| `summary(model)` | 返回可读的用量/费用摘要 |
+
+**关键概念**:
+- 会话用 JSONL 格式追加写入，不覆盖，不怕崩溃
+- `latest` 文件记录最近会话 ID，实现 `/resume` 自动恢复
+- TokenTracker 在每次 LLM 调用后记录，通过 `response.usage` 获取
+- 费用计算基于官方定价表，可通过 `.env` 的 `CUSTOM_PRICING` 覆盖
+
+**新增文件**: `s26_session/code.py`
+
+---
+
+### s27 Project Instructions — "项目有自己的规矩"
+
+**目标**: 自动加载项目级指令文件，等同于 Claude Code 的 `CLAUDE.md`
+
+**搜索顺序**（按优先级合并）:
+
+```
+1. .claude/CLAUDE.md        ← 项目级（最优先，提交到 git）
+2. CLAUDE.md                ← 项目根目录（通用）
+3. .claude/CLAUDE.local.md  ← 本地覆盖（不提交 git，个人配置）
+4. ~/.claude/CLAUDE.md      ← 用户级（全局默认）
+```
+
+**文件格式**: 纯 Markdown，无需 frontmatter
+
+**PromptAssembler 集成**:
+
+注册为 `project_instructions` 段落，priority=5（identity 之后、behavior 之前），条件加载。
+
+```
+[priority 0]  identity:              "You are a coding agent at /workdir."
+[priority 5]  project_instructions:  "不要修改 migrations/..."
+[priority 10] behavior:              "Use tools to solve tasks..."
+[priority 20] skills:                "Skills available: ..."
+[priority 30] memory:                "Relevant memories..."
+```
+
+**关键概念**:
+- 多个文件按优先级合并，都是追加不覆盖
+- `.claude/CLAUDE.local.md` 适合个人配置（已在 .gitignore 中）
+- 加载结果缓存，同一会话内只读一次磁盘
+
+**新增文件**: `s27_project_instructions/code.py`
+
+---
+
+### s28 Slash Commands — "快捷操作入口"
+
+**目标**: 内置斜杠命令，提供交互式控制和快捷操作
+
+**命令清单**:
+
+| 命令 | 功能 | Claude Code 对应 |
+|------|------|-----------------|
+| `/help` | 显示所有命令帮助 | `/help` |
+| `/clear` | 清空对话历史，重新开始 | `/clear` |
+| `/compact [strategy]` | 手动触发上下文压缩 | `/compact` |
+| `/cost` | 显示 token 用量和费用 | `/cost` |
+| `/sessions` | 列出历史会话 | — |
+| `/resume [id]` | 恢复指定会话（无 id 则恢复最近） | — |
+| `/permissions [mode]` | 查看/切换权限模式 | `/allowed-tools` |
+| `/memory` | 显示当前记忆文件列表 | `/memory` |
+
+**架构**:
+
+```
+用户输入
+    ↓
+SlashCommands.handle(text)
+    ├─ 以 "/" 开头 → 匹配命令 → 执行 → 返回 True（不送 LLM）
+    └─ 不以 "/" 开头 → 返回 False → 正常送 LLM
+```
+
+**与 main.py 的集成**:
+
+```python
+slash = SlashCommands(agent, session_mgr, token_tracker, permissions)
+while True:
+    query = input(">> ")
+    if slash.handle(query):   # 斜杠命令已处理，跳过 LLM
+        continue
+    agent.run(history)
+```
+
+**关键概念**:
+- 斜杠命令在 CLI 入口拦截，不送入 LLM，不消耗 token
+- `/clear` 清空内存中的 messages，但不影响磁盘上的会话文件
+- `/compact` 调用 s08 的压缩管线，等同于自动压缩但由用户手动触发
+- `/resume` 从 `.sessions/` 加载 JSONL，替换当前 messages
+- `/permissions` 支持三种模式切换，与 s22 的 PermissionPipeline 联动
+- 命令匹配用精确前缀，不支持模糊匹配（避免歧义）
+
+**新增文件**: `s28_slash_commands/code.py`
+
+---
+
 ## 推荐学习节奏
 
 ```
@@ -1121,6 +1467,18 @@ Week 5:  s15 → s16 → s17 → s18   团队 + 协议 + 自治 + 隔离
 Week 6:  s19 → s20                MCP + 全机制整合
          重点: 理解外部能力集成
          产出: 完整的 agent harness
+
+Week 7:  s21 → s22                沙箱 + 权限模式
+         重点: 理解安全执行和权限分级
+         产出: 能安全执行命令的 agent
+
+Week 8:  s23 → s24 → s25          代码搜索 + Web + 多模态
+         重点: 理解工具生态扩展
+         产出: 能搜索代码、查阅文档、读图/PDF 的 agent
+
+Week 9:  s26 → s27 → s28          会话管理 + 项目指令 + 斜杠命令
+         重点: 理解持久化交互和用户体验
+         产出: 接近 Claude Code 生产级体验的 agent
 ```
 
 ## 每章学习步骤
@@ -1139,10 +1497,14 @@ Week 6:  s19 → s20                MCP + 全机制整合
 ```
 your-agent/
   .env                      # API Key 配置
+  .claude/
+    CLAUDE.md               # s27: 项目级指令
+    CLAUDE.local.md         # s27: 本地覆盖（不提交 git）
   .memory/                  # s09: 持久记忆
   .tasks/                   # s12: 持久化任务
   .transcripts/             # s08: 压缩前的对话记录
   .task_outputs/            # s08: 大输出持久化
+  .sessions/                # s26: 会话持久化
   .mailboxes/               # s15: 队友邮箱
   .worktrees/               # s18: 隔离工作区
   skills/                   # s07: 技能定义
@@ -1156,6 +1518,31 @@ your-agent/
     README.md
   ...
   s20_comprehensive/
+    code.py
+    README.md
+  s21_sandbox/
+    code.py
+    Dockerfile
+    README.md
+  s22_permission_modes/
+    code.py
+    README.md
+  s23_code_search/
+    code.py
+    README.md
+  s24_web_tools/
+    code.py
+    README.md
+  s25_multimedia/
+    code.py
+    README.md
+  s26_session/
+    code.py
+    README.md
+  s27_project_instructions/
+    code.py
+    README.md
+  s28_slash_commands/
     code.py
     README.md
 ```
