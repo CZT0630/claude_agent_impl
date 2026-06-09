@@ -26,6 +26,7 @@ from tools.task import (
     CLAIM_TASK_SCHEMA, COMPLETE_TASK_SCHEMA,
     TaskStore, make_task_handlers,
 )
+from tools.background import BackgroundManager, CHECK_BACKGROUND_SCHEMA  # s13: 后台任务
 from permissions.pipeline import PermissionPipeline
 from hooks.manager import HookManager
 from skills.loader import SkillLoader, LOAD_SKILL_SCHEMA, make_load_skill_handler
@@ -37,9 +38,13 @@ from prompt.assembler import PromptAssembler
 def build_agent(config: Config) -> AgentLoop:
     client = Anthropic(api_key=config.api_key, base_url=config.base_url)
 
+    # s13: 后台任务管理器 — 管理所有后台执行的 shell 命令
+    bg_manager = BackgroundManager(config.workdir)
+
     # 注册工具
     registry = ToolRegistry()
-    registry.register(**BASH_SCHEMA, handler=make_bash_handler(config.workdir))
+    # s13: bash handler 接收 bg_manager，支持 run_in_background 参数
+    registry.register(**BASH_SCHEMA, handler=make_bash_handler(config.workdir, bg_manager))
     registry.register(**READ_SCHEMA, handler=make_read_handler(config.workdir))
     registry.register(**WRITE_SCHEMA, handler=make_write_handler(config.workdir))
     registry.register(**EDIT_SCHEMA, handler=make_edit_handler(config.workdir))
@@ -61,6 +66,10 @@ max_tokens=config.max_tokens,
     skill_loader = SkillLoader()
     registry.register(**LOAD_SKILL_SCHEMA, handler=make_load_skill_handler(skill_loader))
 
+    # s13: check_background 工具 — 手动查询后台任务状态
+    # 通常不需要主动调用，agent loop 每轮会自动 collect()
+    registry.register(**CHECK_BACKGROUND_SCHEMA, handler=lambda: bg_manager.status())
+
     # s10: 动态 Prompt 组装 — 段落注册表 + 条件加载
     assembler = PromptAssembler()
     assembler.register(
@@ -77,6 +86,8 @@ max_tokens=config.max_tokens,
             "For persistent tasks, use create_task/list_tasks/complete_task "
             "to manage a task board that survives across sessions. "
             "For complex subtasks, use the task tool to spawn a subagent. "
+            "For long-running commands, set run_in_background=true in bash "
+            "and use check_background to poll for results. "
             "Act, don't explain."
         ),
         priority=10,
@@ -145,6 +156,7 @@ max_tokens=config.max_tokens,
         hook_manager=hooks,
         compact_pipeline=compact_pipeline,
         memory_manager=memory_manager,
+        bg_manager=bg_manager,    # s13: agent loop 每轮自动收集后台结果
         max_tokens=config.max_tokens,
         fallback_model=config.fallback_model,
     )

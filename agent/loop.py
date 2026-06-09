@@ -3,8 +3,10 @@ Agent 核心循环 — 整个 agent 的心脏
 
 模式:
     while stop_reason == "tool_use":
-        compact(messages)        ← s08: 四层压缩管线
-        system = assemble(ctx)   ← s10: 动态 prompt 组装
+        collect_background_results()  ← s13: 收集后台任务通知
+        collect_cron_triggers()       ← s14: 收集定时任务触发（预留）
+        compact(messages)             ← s08: 四层压缩管线
+        system = assemble(ctx)        ← s10: 动态 prompt 组装
         response = LLM(messages, tools)   ← s11: 带错误恢复
         trigger hooks
         execute tools
@@ -13,6 +15,7 @@ Agent 核心循环 — 整个 agent 的心脏
 
 from anthropic import Anthropic
 from tools.registry import ToolRegistry
+from tools.background import BackgroundManager  # s13: 后台任务管理器
 from hooks.manager import HookManager
 from context.compact import CompactPipeline
 from memory.manager import MemoryManager
@@ -37,6 +40,7 @@ class AgentLoop:
         hook_manager: HookManager | None = None,
         compact_pipeline: CompactPipeline | None = None,
         memory_manager: MemoryManager | None = None,
+        bg_manager: BackgroundManager | None = None,
         max_tokens: int = 8000,
         max_rounds: int | None = None,
         fallback_model: str | None = None,
@@ -47,6 +51,7 @@ class AgentLoop:
         self.hooks = hook_manager or HookManager()
         self.compact = compact_pipeline
         self.memory = memory_manager
+        self.bg = bg_manager
         self.max_tokens = max_tokens
         self.max_rounds = max_rounds
         self.rounds_since_todo = 0
@@ -172,7 +177,20 @@ class AgentLoop:
         for _ in range(self.max_rounds or 10**9):
             self.rounds_since_todo += 1
 
-            # s08: 四层压缩管线 (budget → snip → micro → auto)
+            # ── s13: 收集已完成的后台任务，注入通知 ───────────────────
+            # 为什么放在循环开头？
+            #   第 N 轮: LLM 发起后台命令 → 返回 bg_id → 继续思考
+            #   第 N+1 轮: collect() → 没完成 → 继续思考别的
+            #   第 N+2 轮: collect() → 完成了！→ 注入 <task_notification>
+            #   第 N+3 轮: LLM 看到通知，告知用户结果
+            # Agent 不需要主动轮询，通知自动出现在 messages 里。
+            if self.bg:
+                notifications = self.bg.collect()
+                for notif in notifications:
+                    messages.append({"role": "user", "content": notif})
+                    print(f"\033[36m[bg] {notif[:120]}...\033[0m")
+
+            # ── s08: 四层压缩管线 (budget → snip → micro → auto) ─────
             if self.compact:
                 self.compact.run(messages)
 
