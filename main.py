@@ -31,6 +31,12 @@ from tools.cron import (
     CronScheduler, SCHEDULE_CRON_SCHEMA, LIST_CRONS_SCHEMA, CANCEL_CRON_SCHEMA,
     make_cron_handlers,
 )
+from tools.teams import (  # s15: Agent Teams
+    TeamManager, MessageBus,
+    SPAWN_TEAMMATE_SCHEMA, SEND_MESSAGE_SCHEMA, CHECK_INBOX_SCHEMA, TEAM_STATUS_SCHEMA,
+    make_spawn_teammate_handler, make_send_message_handler,
+    make_check_inbox_handler, make_team_status_handler,
+)
 from permissions.pipeline import PermissionPipeline
 from hooks.manager import HookManager
 from skills.loader import SkillLoader, LOAD_SKILL_SCHEMA, make_load_skill_handler
@@ -81,6 +87,21 @@ max_tokens=config.max_tokens,
     registry.register(**LIST_CRONS_SCHEMA, handler=cron_handlers["list_crons"])
     registry.register(**CANCEL_CRON_SCHEMA, handler=cron_handlers["cancel_cron"])
 
+    # s15: Agent Teams — 消息总线 + 文件邮箱 + 异步队友
+    team_manager = TeamManager(
+        client=client,
+        model=config.model,
+        workdir=config.workdir,
+        parent_registry=registry,
+        max_tokens=config.max_tokens,
+    )
+    # Lead agent 的 send_message / check_inbox（sender_name="lead"）
+    registry.register(**SEND_MESSAGE_SCHEMA, handler=make_send_message_handler(team_manager.bus, "lead"))
+    registry.register(**CHECK_INBOX_SCHEMA, handler=make_check_inbox_handler(team_manager.bus, "lead"))
+    # spawn_teammate / team_status 只有 lead 能用
+    registry.register(**SPAWN_TEAMMATE_SCHEMA, handler=make_spawn_teammate_handler(team_manager))
+    registry.register(**TEAM_STATUS_SCHEMA, handler=make_team_status_handler(team_manager))
+
     # s10: 动态 Prompt 组装 — 段落注册表 + 条件加载
     assembler = PromptAssembler()
     assembler.register(
@@ -102,6 +123,9 @@ max_tokens=config.max_tokens,
             "For recurring tasks, use schedule_cron with a 5-field cron expression "
             "(minute hour day month weekday) to auto-trigger messages. "
             "Use list_crons to see scheduled tasks, cancel_cron to remove them. "
+            "For parallel teamwork, use spawn_teammate to launch agents on subtasks. "
+            "Communicate via send_message/check_inbox. "
+            "Use team_status to monitor teammates. "
             "Act, don't explain."
         ),
         priority=10,
@@ -172,6 +196,7 @@ max_tokens=config.max_tokens,
         memory_manager=memory_manager,
         bg_manager=bg_manager,    # s13: agent loop 每轮自动收集后台结果
         cron_scheduler=cron_scheduler,  # s14: agent loop 每轮自动收集定时触发
+        team_manager=team_manager,      # s15: agent loop 每轮自动收集队友消息
         max_tokens=config.max_tokens,
         fallback_model=config.fallback_model,
     )

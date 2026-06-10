@@ -5,6 +5,7 @@ Agent 核心循环 — 整个 agent 的心脏
     while stop_reason == "tool_use":
         collect_background_results()  ← s13: 收集后台任务通知
         collect_cron_triggers()       ← s14: 收集定时任务触发
+        collect_team_messages()       ← s15: 收集队友消息
         compact(messages)             ← s08: 四层压缩管线
         system = assemble(ctx)        ← s10: 动态 prompt 组装
         response = LLM(messages, tools)   ← s11: 带错误恢复
@@ -13,10 +14,12 @@ Agent 核心循环 — 整个 agent 的心脏
         append results
 """
 
+import json
 from anthropic import Anthropic
 from tools.registry import ToolRegistry
 from tools.background import BackgroundManager  # s13: 后台任务管理器
 from tools.cron import CronScheduler            # s14: 定时调度器
+from tools.teams import TeamManager             # s15: 队友管理器
 from hooks.manager import HookManager
 from context.compact import CompactPipeline
 from memory.manager import MemoryManager
@@ -43,6 +46,7 @@ class AgentLoop:
         memory_manager: MemoryManager | None = None,
         bg_manager: BackgroundManager | None = None,
         cron_scheduler: CronScheduler | None = None,
+        team_manager: TeamManager | None = None,
         max_tokens: int = 8000,
         max_rounds: int | None = None,
         fallback_model: str | None = None,
@@ -55,6 +59,7 @@ class AgentLoop:
         self.memory = memory_manager
         self.bg = bg_manager
         self.cron = cron_scheduler
+        self.team = team_manager
         self.max_tokens = max_tokens
         self.max_rounds = max_rounds
         self.rounds_since_todo = 0
@@ -203,6 +208,20 @@ class AgentLoop:
                 for msg in cron_messages:
                     messages.append({"role": "user", "content": f"[cron trigger] {msg}"})
                     print(f"\033[36m[cron] {msg[:120]}...\033[0m")
+
+            # ── s15: 收集队友消息，注入 inbox 通知 ───────────────────
+            # 队友通过 send_message 发消息到 lead 的邮箱
+            # agent loop 每轮开头自动读取，注入 messages
+            # 这样 lead 不需要手动调 check_inbox 也能看到队友的消息
+            if self.team:
+                inbox = self.team.bus.receive("lead")
+                for msg in inbox:
+                    content = msg["payload"].get("content", json.dumps(msg["payload"]))
+                    notification = (
+                        f"[team message] from={msg['from']} type={msg['type']}\n{content}"
+                    )
+                    messages.append({"role": "user", "content": notification})
+                    print(f"\033[36m[team] {msg['from']}: {content[:120]}...\033[0m")
 
             # ── s08: 四层压缩管线 (budget → snip → micro → auto) ─────
             if self.compact:
