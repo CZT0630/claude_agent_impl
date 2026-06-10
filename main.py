@@ -27,6 +27,10 @@ from tools.task import (
     TaskStore, make_task_handlers,
 )
 from tools.background import BackgroundManager, CHECK_BACKGROUND_SCHEMA  # s13: 后台任务
+from tools.cron import (
+    CronScheduler, SCHEDULE_CRON_SCHEMA, LIST_CRONS_SCHEMA, CANCEL_CRON_SCHEMA,
+    make_cron_handlers,
+)
 from permissions.pipeline import PermissionPipeline
 from hooks.manager import HookManager
 from skills.loader import SkillLoader, LOAD_SKILL_SCHEMA, make_load_skill_handler
@@ -70,6 +74,13 @@ max_tokens=config.max_tokens,
     # 通常不需要主动调用，agent loop 每轮会自动 collect()
     registry.register(**CHECK_BACKGROUND_SCHEMA, handler=lambda: bg_manager.status())
 
+    # s14: Cron 定时调度器 — 独立守护线程按时触发任务
+    cron_scheduler = CronScheduler(config.workdir)
+    cron_handlers = make_cron_handlers(cron_scheduler)
+    registry.register(**SCHEDULE_CRON_SCHEMA, handler=cron_handlers["schedule_cron"])
+    registry.register(**LIST_CRONS_SCHEMA, handler=cron_handlers["list_crons"])
+    registry.register(**CANCEL_CRON_SCHEMA, handler=cron_handlers["cancel_cron"])
+
     # s10: 动态 Prompt 组装 — 段落注册表 + 条件加载
     assembler = PromptAssembler()
     assembler.register(
@@ -88,6 +99,9 @@ max_tokens=config.max_tokens,
             "For complex subtasks, use the task tool to spawn a subagent. "
             "For long-running commands, set run_in_background=true in bash "
             "and use check_background to poll for results. "
+            "For recurring tasks, use schedule_cron with a 5-field cron expression "
+            "(minute hour day month weekday) to auto-trigger messages. "
+            "Use list_crons to see scheduled tasks, cancel_cron to remove them. "
             "Act, don't explain."
         ),
         priority=10,
@@ -157,6 +171,7 @@ max_tokens=config.max_tokens,
         compact_pipeline=compact_pipeline,
         memory_manager=memory_manager,
         bg_manager=bg_manager,    # s13: agent loop 每轮自动收集后台结果
+        cron_scheduler=cron_scheduler,  # s14: agent loop 每轮自动收集定时触发
         max_tokens=config.max_tokens,
         fallback_model=config.fallback_model,
     )
@@ -176,6 +191,10 @@ max_tokens=config.max_tokens,
 def main():
     config = Config.from_env()
     agent = build_agent(config)
+
+    # s14: 启动 cron 调度器守护线程
+    if agent.cron:
+        agent.cron.start()
 
     print(f"Claude Agent — model: {config.model}")
     print(f"Working directory: {config.workdir}")
@@ -202,6 +221,10 @@ def main():
                     except UnicodeEncodeError:
                         print(block.text.encode("utf-8", errors="replace").decode("utf-8"))
         print()
+
+    # s14: 停止 cron 调度器（干净退出）
+    if agent.cron:
+        agent.cron.stop()
 
 
 if __name__ == "__main__":

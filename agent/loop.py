@@ -4,7 +4,7 @@ Agent 核心循环 — 整个 agent 的心脏
 模式:
     while stop_reason == "tool_use":
         collect_background_results()  ← s13: 收集后台任务通知
-        collect_cron_triggers()       ← s14: 收集定时任务触发（预留）
+        collect_cron_triggers()       ← s14: 收集定时任务触发
         compact(messages)             ← s08: 四层压缩管线
         system = assemble(ctx)        ← s10: 动态 prompt 组装
         response = LLM(messages, tools)   ← s11: 带错误恢复
@@ -16,6 +16,7 @@ Agent 核心循环 — 整个 agent 的心脏
 from anthropic import Anthropic
 from tools.registry import ToolRegistry
 from tools.background import BackgroundManager  # s13: 后台任务管理器
+from tools.cron import CronScheduler            # s14: 定时调度器
 from hooks.manager import HookManager
 from context.compact import CompactPipeline
 from memory.manager import MemoryManager
@@ -41,6 +42,7 @@ class AgentLoop:
         compact_pipeline: CompactPipeline | None = None,
         memory_manager: MemoryManager | None = None,
         bg_manager: BackgroundManager | None = None,
+        cron_scheduler: CronScheduler | None = None,
         max_tokens: int = 8000,
         max_rounds: int | None = None,
         fallback_model: str | None = None,
@@ -52,6 +54,7 @@ class AgentLoop:
         self.compact = compact_pipeline
         self.memory = memory_manager
         self.bg = bg_manager
+        self.cron = cron_scheduler
         self.max_tokens = max_tokens
         self.max_rounds = max_rounds
         self.rounds_since_todo = 0
@@ -189,6 +192,17 @@ class AgentLoop:
                 for notif in notifications:
                     messages.append({"role": "user", "content": notif})
                     print(f"\033[36m[bg] {notif[:120]}...\033[0m")
+
+            # ── s14: 收集定时任务触发，注入消息 ─────────────────────
+            # 为什么放在循环开头（和 bg collect 并列）？
+            #   守护线程每秒检查 cron 表达式，匹配时 put 进队列
+            #   agent loop 每轮开头 get_nowait() 消费队列
+            #   这样调度器完全独立于 agent，不阻塞也不丢失
+            if self.cron:
+                cron_messages = self.cron.collect()
+                for msg in cron_messages:
+                    messages.append({"role": "user", "content": f"[cron trigger] {msg}"})
+                    print(f"\033[36m[cron] {msg[:120]}...\033[0m")
 
             # ── s08: 四层压缩管线 (budget → snip → micro → auto) ─────
             if self.compact:
