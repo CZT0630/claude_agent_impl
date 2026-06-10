@@ -94,11 +94,13 @@ max_tokens=config.max_tokens,
     registry.register(**CANCEL_CRON_SCHEMA, handler=cron_handlers["cancel_cron"])
 
     # s15: Agent Teams — 消息总线 + 文件邮箱 + 异步队友
+    # s17: 传入 task_store 支持自动认领任务
     team_manager = TeamManager(
         client=client,
         model=config.model,
         workdir=config.workdir,
         parent_registry=registry,
+        task_store=task_store,  # s17: 自动认领所需
         max_tokens=config.max_tokens,
     )
     # Lead agent 的 send_message / check_inbox（sender_name="lead"）
@@ -143,6 +145,9 @@ max_tokens=config.max_tokens,
             "Use request_plan to ask a teammate for a plan before they start. "
             "Use review_plan to approve/reject a teammate's plan. "
             "Use protocol_status to track protocol requests. "
+            "Teammates will automatically claim unclaimed tasks from the task board "
+            "when idle. No need to manually assign tasks - just create them with "
+            "create_task and teammates will pick them up automatically. "
             "Act, don't explain."
         ),
         priority=10,

@@ -1,5 +1,5 @@
 """
-Agent Teams — s15: 消息总线 + 文件邮箱 + 异步队友
+Agent Teams — s15 + s17: 消息总线 + 文件邮箱 + 异步队友 + 自动认领
 
 问题: 单个 agent 的上下文有限，复杂任务需要分工协作。
 方案: Lead Agent 派生 Teammate Agent 在独立线程中运行，
@@ -20,16 +20,28 @@ Agent Teams — s15: 消息总线 + 文件邮箱 + 异步队友
 邮箱格式: .mailboxes/{agent_name}.jsonl
     每行一个 JSON 对象: {"from": str, "type": str, "payload": dict, "timestamp": float}
 
+s17 自动认领增强:
+    - 队友在 IDLE 阶段自动扫描任务看板
+    - 自动认领 status=pending, owner=None, 依赖已完成 的任务
+    - 60 秒无任务可认领则自动关机
+    - 队友拥有 list_tasks, claim_task, complete_task 工具
+
 新工具 (Lead):
     spawn_teammate  — 派生队友线程，返回 teammate_id
     send_message    — 向队友发送消息
     check_inbox     — 检查自己的收件箱
+
+新工具 (Teammate, s17):
+    list_tasks      — 查看任务列表
+    claim_task      — 认领任务
+    complete_task   — 完成任务
 
 关键设计:
     - 队友在独立 daemon 线程中运行自己的 AgentLoop
     - 通过文件邮箱异步通信，不阻塞 lead agent
     - 队友有 10 轮安全限制
     - 队友不能再派生队友（工具集排除 spawn_teammate）
+    - s17: 队友自主认领任务，无需 Lead 逐个分配
 """
 
 import json
@@ -40,6 +52,7 @@ from pathlib import Path
 from anthropic import Anthropic
 from agent.loop import AgentLoop
 from tools.registry import ToolRegistry
+from tools.task import TaskStore, can_start, LIST_TASKS_SCHEMA, CLAIM_TASK_SCHEMA, COMPLETE_TASK_SCHEMA, make_task_handlers
 
 
 # ── 消息总线 ──────────────────────────────────────────────────────────
@@ -134,13 +147,23 @@ class TeamManager:
         - 派生队友线程（独立 AgentLoop）
         - 追踪队友状态（running / completed / failed）
         - 通过 MessageBus 实现通信
+        - s17: 支持队友自动认领任务
     """
 
-    # 队友的 system prompt
+    # 队友的 system prompt (s17 增强版)
     TEAMMATE_SYSTEM = (
-        "You are a teammate agent working on a subtask assigned by the lead agent. "
-        "Complete your task, then use send_message to report results back to 'lead'. "
-        "After completing your task, you will enter idle mode and wait for new messages. "
+        "You are an autonomous teammate agent. Your workflow:\n"
+        "1. When you receive a task, work on it and complete it.\n"
+        "2. After completing a task, use complete_task to mark it done.\n"
+        "3. When idle, you will automatically claim unclaimed tasks from the task board.\n"
+        "4. If no tasks are available for 60 seconds, you will shut down automatically.\n\n"
+        "Available task management tools:\n"
+        "- list_tasks: See all tasks on the board\n"
+        "- claim_task: Claim a specific task (auto-claim will do this for you)\n"
+        "- complete_task: Mark a task as completed\n\n"
+        "You can also:\n"
+        "- Use send_message to communicate with the lead agent\n"
+        "- Use check_inbox to receive messages\n\n"
         "If you receive a shutdown request, acknowledge it and stop. "
         "If you receive a plan request, respond with your proposed plan. "
         "You have a limited number of rounds per task — work efficiently. "
@@ -153,6 +176,7 @@ class TeamManager:
         model: str,
         workdir: Path,
         parent_registry: ToolRegistry,
+        task_store: TaskStore | None = None,
         max_tokens: int = 8000,
     ):
         self.client = client
@@ -161,6 +185,7 @@ class TeamManager:
         self.parent_registry = parent_registry
         self.max_tokens = max_tokens
         self.bus = MessageBus(workdir)
+        self.task_store = task_store  # s17: 任务存储，用于自动认领
 
         self._teammates: dict[str, dict] = {}  # name → {thread, status, started_at}
         self._lock = threading.Lock()
@@ -174,7 +199,8 @@ class TeamManager:
         """
         构建队友的工具注册表。
 
-        包含: bash, read_file, write_file, edit_file, glob, send_message, check_inbox
+        包含: bash, read_file, write_file, edit_file, glob, send_message, check_inbox,
+              list_tasks, claim_task, complete_task (s17: 自动认领所需)
         排除: task (不能递归派生), spawn_teammate (不能派生队友)
         """
         excluded = {"task", "spawn_teammate"}
@@ -198,6 +224,22 @@ class TeamManager:
             **CHECK_INBOX_SCHEMA,
             handler=make_check_inbox_handler(self.bus, teammate_name),
         )
+
+        # s17: 给队友注册任务管理工具（自动认领所需）
+        if self.task_store:
+            task_handlers = make_task_handlers(self.task_store)
+            registry.register(
+                **LIST_TASKS_SCHEMA,
+                handler=task_handlers["list_tasks"],
+            )
+            registry.register(
+                **CLAIM_TASK_SCHEMA,
+                handler=task_handlers["claim_task"],
+            )
+            registry.register(
+                **COMPLETE_TASK_SCHEMA,
+                handler=task_handlers["complete_task"],
+            )
 
         return registry
 
@@ -260,10 +302,10 @@ class TeamManager:
                 with self._lock:
                     self._teammates[name]["lifecycle"] = "idle"
 
-                # ── IDLE 阶段: 等待新消息 ──
+                # ── IDLE 阶段: 等待新消息 + 自动认领任务 (s17) ──
                 idle_start = time.time()
                 while True:
-                    # 检查是否有新消息
+                    # 1. 检查是否有新消息
                     inbox = self.bus.receive(name)
                     if inbox:
                         idle_start = time.time()  # 重置空闲计时
@@ -303,7 +345,56 @@ class TeamManager:
                                     self._teammates[name]["lifecycle"] = "idle"
                                 idle_start = time.time()  # 重置空闲计时
 
-                    # 空闲超时检查
+                    # 2. s17: 自动扫描任务看板，认领未分配的任务
+                    if self.task_store:
+                        unclaimed = [
+                            t for t in self.task_store.list_all()
+                            if t.status == "pending"
+                            and t.owner is None
+                            and can_start(t, self.task_store)
+                        ]
+                        if unclaimed:
+                            # 认领第一个可用任务
+                            task = unclaimed[0]
+                            task.status = "in_progress"
+                            task.owner = name
+                            self.task_store.save(task)
+
+                            with self._lock:
+                                self._teammates[name]["lifecycle"] = "work_claimed"
+                                self._teammates[name]["current_task"] = task.id
+
+                            # 执行认领的任务
+                            sub_agent3 = AgentLoop(
+                                client=self.client,
+                                model=self.model,
+                                system_prompt=self.TEAMMATE_SYSTEM,
+                                tool_registry=registry,
+                                max_tokens=self.max_tokens,
+                                max_rounds=rounds,
+                            )
+                            task_messages = [
+                                {
+                                    "role": "user",
+                                    "content": (
+                                        f"You have auto-claimed a task from the task board.\n\n"
+                                        f"Task ID: {task.id}\n"
+                                        f"Subject: {task.subject}\n"
+                                        f"Description: {task.description}\n\n"
+                                        f"Complete this task, then use complete_task('{task.id}') to mark it done. "
+                                        f"After completing, report results to 'lead' via send_message."
+                                    ),
+                                }
+                            ]
+                            sub_agent3.run(task_messages)
+
+                            with self._lock:
+                                self._teammates[name]["lifecycle"] = "idle"
+                                self._teammates[name].pop("current_task", None)
+                            idle_start = time.time()  # 重置空闲计时
+                            continue  # 继续检查是否有其他任务
+
+                    # 3. 空闲超时检查
                     if time.time() - idle_start > idle_timeout:
                         with self._lock:
                             self._teammates[name]["lifecycle"] = "timeout"
