@@ -37,6 +37,12 @@ from tools.teams import (  # s15: Agent Teams
     make_spawn_teammate_handler, make_send_message_handler,
     make_check_inbox_handler, make_team_status_handler,
 )
+from tools.team_protocols import (  # s16: Team Protocols
+    ProtocolManager,
+    REQUEST_SHUTDOWN_SCHEMA, REQUEST_PLAN_SCHEMA, REVIEW_PLAN_SCHEMA, PROTOCOL_STATUS_SCHEMA,
+    make_request_shutdown_handler, make_request_plan_handler,
+    make_review_plan_handler, make_protocol_status_handler,
+)
 from permissions.pipeline import PermissionPipeline
 from hooks.manager import HookManager
 from skills.loader import SkillLoader, LOAD_SKILL_SCHEMA, make_load_skill_handler
@@ -102,6 +108,13 @@ max_tokens=config.max_tokens,
     registry.register(**SPAWN_TEAMMATE_SCHEMA, handler=make_spawn_teammate_handler(team_manager))
     registry.register(**TEAM_STATUS_SCHEMA, handler=make_team_status_handler(team_manager))
 
+    # s16: Team Protocols — 请求-回复协议 + 状态机
+    protocol_mgr = ProtocolManager(team_manager.bus)
+    registry.register(**REQUEST_SHUTDOWN_SCHEMA, handler=make_request_shutdown_handler(protocol_mgr, team_manager))
+    registry.register(**REQUEST_PLAN_SCHEMA, handler=make_request_plan_handler(protocol_mgr, team_manager))
+    registry.register(**REVIEW_PLAN_SCHEMA, handler=make_review_plan_handler(protocol_mgr, team_manager.bus))
+    registry.register(**PROTOCOL_STATUS_SCHEMA, handler=make_protocol_status_handler(protocol_mgr))
+
     # s10: 动态 Prompt 组装 — 段落注册表 + 条件加载
     assembler = PromptAssembler()
     assembler.register(
@@ -126,6 +139,10 @@ max_tokens=config.max_tokens,
             "For parallel teamwork, use spawn_teammate to launch agents on subtasks. "
             "Communicate via send_message/check_inbox. "
             "Use team_status to monitor teammates. "
+            "Use request_shutdown to gracefully stop a teammate. "
+            "Use request_plan to ask a teammate for a plan before they start. "
+            "Use review_plan to approve/reject a teammate's plan. "
+            "Use protocol_status to track protocol requests. "
             "Act, don't explain."
         ),
         priority=10,

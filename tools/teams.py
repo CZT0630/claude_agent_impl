@@ -140,7 +140,10 @@ class TeamManager:
     TEAMMATE_SYSTEM = (
         "You are a teammate agent working on a subtask assigned by the lead agent. "
         "Complete your task, then use send_message to report results back to 'lead'. "
-        "You have a limited number of rounds — work efficiently. "
+        "After completing your task, you will enter idle mode and wait for new messages. "
+        "If you receive a shutdown request, acknowledge it and stop. "
+        "If you receive a plan request, respond with your proposed plan. "
+        "You have a limited number of rounds per task — work efficiently. "
         "Do not spawn further teammates."
     )
 
@@ -198,14 +201,22 @@ class TeamManager:
 
         return registry
 
-    def spawn(self, name: str | None, task_description: str, rounds: int = 10) -> str:
+    def spawn(self, name: str | None, task_description: str, rounds: int = 10, idle_timeout: float = 60.0) -> str:
         """
         派生一个队友 agent 在独立线程中执行任务。
+
+        生命周期:
+            WORK: 执行初始任务 (最多 rounds 轮)
+            → 任务完成 → IDLE: 等待新消息
+            → 收到新消息 → WORK: 处理消息 (最多 rounds 轮)
+            → 处理完成 → IDLE
+            → idle_timeout 秒无消息 → SHUTDOWN
 
         Args:
             name: 队友名字（可选，默认自动生成）
             task_description: 队友的任务描述
-            rounds: 安全轮次限制，默认 10
+            rounds: 每个工作周期的安全轮次限制，默认 10
+            idle_timeout: 空闲超时秒数，默认 60
 
         Returns:
             队友名字（用于后续 send_message / check_inbox）
@@ -220,23 +231,24 @@ class TeamManager:
                 "status": "running",
                 "started_at": time.time(),
                 "task": task_description,
+                "lifecycle": "work",
             }
 
         # 构建队友的工具集和 agent loop
         registry = self._build_teammate_registry(name)
-        sub_agent = AgentLoop(
-            client=self.client,
-            model=self.model,
-            system_prompt=self.TEAMMATE_SYSTEM,
-            tool_registry=registry,
-            max_tokens=self.max_tokens,
-            max_rounds=rounds,
-        )
 
         def run():
-            """线程内: 队友的 agent loop"""
+            """线程内: 队友的 agent loop (WORK → IDLE 循环)"""
             try:
-                # 给队友发一条初始消息（包含任务描述 + 自我介绍）
+                # ── WORK 阶段: 执行初始任务 ──
+                sub_agent = AgentLoop(
+                    client=self.client,
+                    model=self.model,
+                    system_prompt=self.TEAMMATE_SYSTEM,
+                    tool_registry=registry,
+                    max_tokens=self.max_tokens,
+                    max_rounds=rounds,
+                )
                 initial = (
                     f"Your name is '{name}'. You are a teammate agent.\n\n"
                     f"Your task:\n{task_description}\n\n"
@@ -246,8 +258,61 @@ class TeamManager:
                 sub_agent.run(messages)
 
                 with self._lock:
-                    self._teammates[name]["status"] = "completed"
-                    self._teammates[name]["finished_at"] = time.time()
+                    self._teammates[name]["lifecycle"] = "idle"
+
+                # ── IDLE 阶段: 等待新消息 ──
+                idle_start = time.time()
+                while True:
+                    # 检查是否有新消息
+                    inbox = self.bus.receive(name)
+                    if inbox:
+                        idle_start = time.time()  # 重置空闲计时
+
+                        # 处理协议消息
+                        from tools.team_protocols import handle_protocol_message, is_protocol_message
+                        for msg in inbox:
+                            if is_protocol_message(msg):
+                                result = handle_protocol_message(msg, self.bus, name)
+                                if result and "shutdown" in result.lower():
+                                    # 收到关机请求，退出
+                                    with self._lock:
+                                        self._teammates[name]["lifecycle"] = "shutdown"
+                                        self._teammates[name]["status"] = "completed"
+                                        self._teammates[name]["finished_at"] = time.time()
+                                    return
+                            else:
+                                # 普通消息，进入 WORK 阶段处理
+                                with self._lock:
+                                    self._teammates[name]["lifecycle"] = "work"
+
+                                content = msg["payload"].get("content", json.dumps(msg["payload"]))
+                                sub_agent2 = AgentLoop(
+                                    client=self.client,
+                                    model=self.model,
+                                    system_prompt=self.TEAMMATE_SYSTEM,
+                                    tool_registry=registry,
+                                    max_tokens=self.max_tokens,
+                                    max_rounds=rounds,
+                                )
+                                new_messages = [
+                                    {"role": "user", "content": f"New message from {msg['from']}:\n{content}"}
+                                ]
+                                sub_agent2.run(new_messages)
+
+                                with self._lock:
+                                    self._teammates[name]["lifecycle"] = "idle"
+                                idle_start = time.time()  # 重置空闲计时
+
+                    # 空闲超时检查
+                    if time.time() - idle_start > idle_timeout:
+                        with self._lock:
+                            self._teammates[name]["lifecycle"] = "timeout"
+                            self._teammates[name]["status"] = "completed"
+                            self._teammates[name]["finished_at"] = time.time()
+                        return
+
+                    time.sleep(3)  # 每 3 秒轮询一次
+
             except Exception as e:
                 with self._lock:
                     self._teammates[name]["status"] = "failed"
@@ -283,9 +348,11 @@ class TeamManager:
                 icon = {"running": "🔄", "completed": "✅", "failed": "❌"}.get(
                     info["status"], "❓"
                 )
+                lifecycle = info.get("lifecycle", "")
+                lifecycle_tag = f" ({lifecycle})" if lifecycle else ""
                 elapsed = time.time() - info["started_at"]
                 task_preview = info["task"][:60]
-                lines.append(f"  {icon} {name} [{info['status']}] {task_preview}... ({elapsed:.0f}s)")
+                lines.append(f"  {icon} {name} [{info['status']}{lifecycle_tag}] {task_preview}... ({elapsed:.0f}s)")
             return "\n".join(lines)
 
     @property
