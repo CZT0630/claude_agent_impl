@@ -20,6 +20,7 @@ from tools.registry import ToolRegistry
 from tools.background import BackgroundManager  # s13: 后台任务管理器
 from tools.cron import CronScheduler            # s14: 定时调度器
 from tools.teams import TeamManager             # s15: 队友管理器
+from tools.mcp import MCPManager               # s19: MCP 外部工具管理器
 from hooks.manager import HookManager
 from context.compact import CompactPipeline
 from memory.manager import MemoryManager
@@ -47,6 +48,7 @@ class AgentLoop:
         bg_manager: BackgroundManager | None = None,
         cron_scheduler: CronScheduler | None = None,
         team_manager: TeamManager | None = None,
+        mcp_manager: MCPManager | None = None,
         max_tokens: int = 8000,
         max_rounds: int | None = None,
         fallback_model: str | None = None,
@@ -60,6 +62,7 @@ class AgentLoop:
         self.bg = bg_manager
         self.cron = cron_scheduler
         self.team = team_manager
+        self.mcp_manager = mcp_manager
         self.max_tokens = max_tokens
         self.max_rounds = max_rounds
         self.rounds_since_todo = 0

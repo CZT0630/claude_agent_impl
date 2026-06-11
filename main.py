@@ -48,6 +48,11 @@ from tools.worktree import (  # s18: Worktree Isolation
     CREATE_WORKTREE_SCHEMA, REMOVE_WORKTREE_SCHEMA, KEEP_WORKTREE_SCHEMA,
     make_worktree_handlers,
 )
+from tools.mcp import (  # s19: MCP Plugin
+    MCPManager,
+    MCP_CONNECT_SCHEMA, MCP_DISCONNECT_SCHEMA, MCP_LIST_TOOLS_SCHEMA,
+    make_mcp_handlers,
+)
 from permissions.pipeline import PermissionPipeline
 from hooks.manager import HookManager
 from skills.loader import SkillLoader, LOAD_SKILL_SCHEMA, make_load_skill_handler
@@ -104,6 +109,13 @@ max_tokens=config.max_tokens,
     registry.register(**CREATE_WORKTREE_SCHEMA, handler=wt_handlers["create_worktree"])
     registry.register(**REMOVE_WORKTREE_SCHEMA, handler=wt_handlers["remove_worktree"])
     registry.register(**KEEP_WORKTREE_SCHEMA, handler=wt_handlers["keep_worktree"])
+
+    # s19: MCP Plugin — 连接外部 MCP 服务器，自动发现并注册远程工具
+    mcp_manager = MCPManager(config.workdir)
+    mcp_handlers = make_mcp_handlers(mcp_manager, registry)
+    registry.register(**MCP_CONNECT_SCHEMA, handler=mcp_handlers["mcp_connect"])
+    registry.register(**MCP_DISCONNECT_SCHEMA, handler=mcp_handlers["mcp_disconnect"])
+    registry.register(**MCP_LIST_TOOLS_SCHEMA, handler=mcp_handlers["mcp_list_tools"])
 
     # Agent Teams — 消息总线 + 文件邮箱 + 异步队友
     # 传入 task_store 支持自动认领任务，worktree_mgr 支持目录隔离
@@ -185,6 +197,18 @@ max_tokens=config.max_tokens,
         condition=lambda ctx: ctx.get("has_memories", False),
         priority=30,
     )
+    assembler.register(
+        "mcp",
+        lambda ctx: (
+            "MCP (Model Context Protocol) servers provide external tools. "
+            "Use mcp_connect(server_name) to connect and discover tools, "
+            "mcp_disconnect(server_name) to disconnect, "
+            "mcp_list_tools to see all available MCP tools. "
+            "MCP tools are named mcp__{server}__{tool} and can be called directly."
+        ),
+        condition=lambda ctx: True,  # 始终显示，引导 agent 使用 MCP
+        priority=25,
+    )
 
     # s08: 四层上下文压缩管线
     compact_pipeline = CompactPipeline(
@@ -234,6 +258,7 @@ max_tokens=config.max_tokens,
         bg_manager=bg_manager,    # s13: agent loop 每轮自动收集后台结果
         cron_scheduler=cron_scheduler,  # s14: agent loop 每轮自动收集定时触发
         team_manager=team_manager,      # s15: agent loop 每轮自动收集队友消息
+        mcp_manager=mcp_manager,        # s19: MCP 外部工具管理
         max_tokens=config.max_tokens,
         fallback_model=config.fallback_model,
     )
@@ -257,6 +282,12 @@ def main():
     # s14: 启动 cron 调度器守护线程
     if agent.cron:
         agent.cron.start()
+
+    # s19: 自动连接 .mcp.json 中配置的 MCP 服务器
+    if agent.mcp_manager:
+        mcp_result = agent.mcp_manager.auto_connect_all()
+        if mcp_result and "No MCP" not in mcp_result:
+            print(f"\033[36m[mcp] {mcp_result}\033[0m")
 
     print(f"Claude Agent — model: {config.model}")
     print(f"Working directory: {config.workdir}")
@@ -287,6 +318,10 @@ def main():
     # s14: 停止 cron 调度器（干净退出）
     if agent.cron:
         agent.cron.stop()
+
+    # s19: 关闭所有 MCP 连接
+    if agent.mcp_manager:
+        agent.mcp_manager.shutdown_all()
 
 
 if __name__ == "__main__":
