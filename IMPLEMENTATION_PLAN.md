@@ -943,7 +943,7 @@ def scan_unclaimed_tasks():
 - 空闲时自动扫描任务看板
 - 60 秒无活可干则自动关机
 
-**新增文件**: `s17_autonomous_agents/code.py`
+**实现**: `scan_unclaimed_tasks` + `auto_claim_task` 已合并入 `tools/task.py`，`tools/teams.py` 直接调用。`s17_autonomous_agents/` 目录已删除。
 
 ---
 

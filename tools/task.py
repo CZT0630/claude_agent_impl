@@ -78,6 +78,36 @@ def can_start(task: Task, store: TaskStore) -> bool:
     return True
 
 
+# ── 自动认领 ───────────────────────────────────────────────────────
+
+def scan_unclaimed_tasks(store: TaskStore) -> list[Task]:
+    """扫描未认领的、依赖已完成的 pending 任务。"""
+    return [
+        t for t in store.list_all()
+        if t.status == "pending"
+        and t.owner is None
+        and can_start(t, store)
+    ]
+
+
+def auto_claim_task(store: TaskStore, agent_name: str) -> str | None:
+    """
+    自动认领一个可执行的任务。
+
+    Returns:
+        认领的任务 ID，或 None（没有可认领的任务）
+    """
+    unclaimed = scan_unclaimed_tasks(store)
+    if not unclaimed:
+        return None
+
+    task = unclaimed[0]
+    task.status = "in_progress"
+    task.owner = agent_name
+    store.save(task)
+    return task.id
+
+
 # ── 工具 Schema ───────────────────────────────────────────────────
 
 CREATE_TASK_SCHEMA = {

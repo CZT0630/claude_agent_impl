@@ -132,7 +132,7 @@ claude_agent_impl/
 │   ├── __init__.py
 │   ├── bus.py                  # s15: 消息总线
 │   ├── protocols.py            # s16: 团队协议
-│   └── autonomous.py           # s17: 自治 Agent
+│   └── autonomous.py           # s17: 自治 Agent (已合并入 tools/task.py)
 │
 ├── worktree/                   # 工作区隔离
 │   ├── __init__.py
@@ -171,7 +171,7 @@ claude_agent_impl/
 | s14 Cron Scheduler | scheduler/cron.py | ⬜ | 定时调度 |
 | s15 Agent Teams | teams/bus.py | ⬜ | 多 Agent 协作 |
 | s16 Team Protocols | teams/protocols.py | ⬜ | 团队协议 |
-| s17 Autonomous Agents | teams/autonomous.py | ⬜ | 自治 Agent |
+| s17 Autonomous Agents | tools/task.py | ✅ | 自治 Agent (已合并) |
 | s18 Worktree Isolation | worktree/manager.py | ⬜ | 工作区隔离 |
 | s19 MCP Plugin | mcp/client.py | ⬜ | MCP 工具集成 |
 | s20 Comprehensive | main.py | ⬜ | 全机制整合 |
