@@ -988,7 +988,7 @@ def bind_task_to_worktree(task_id: str, worktree_name: str):
 - 队友在 worktree 目录中工作，互不干扰
 - 事件日志记录所有操作
 
-**新增文件**: `s18_worktree_isolation/code.py`
+**实现**: `tools/worktree.py` (WorktreeManager + 3 个工具)，已集成到 `tools/teams.py` 的 `spawn()` 和 `main.py`。`s18_worktree_isolation/` 目录已废弃。
 
 ---
 

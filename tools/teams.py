@@ -53,6 +53,7 @@ from anthropic import Anthropic
 from agent.loop import AgentLoop
 from tools.registry import ToolRegistry
 from tools.task import TaskStore, LIST_TASKS_SCHEMA, CLAIM_TASK_SCHEMA, COMPLETE_TASK_SCHEMA, make_task_handlers, auto_claim_task
+from tools.worktree import WorktreeManager
 
 
 # ── 消息总线 ──────────────────────────────────────────────────────────
@@ -170,6 +171,10 @@ class TeamManager:
         "Do not spawn further teammates."
     )
 
+    # 不随 worktree 切换的工具（共享路径）
+    _SHARED_TOOLS = {"send_message", "check_inbox", "list_tasks", "claim_task", "complete_task",
+                     "spawn_teammate", "task", "team_status"}
+
     def __init__(
         self,
         client: Anthropic,
@@ -177,6 +182,7 @@ class TeamManager:
         workdir: Path,
         parent_registry: ToolRegistry,
         task_store: TaskStore | None = None,
+        worktree_manager: WorktreeManager | None = None,
         max_tokens: int = 8000,
     ):
         self.client = client
@@ -186,6 +192,7 @@ class TeamManager:
         self.max_tokens = max_tokens
         self.bus = MessageBus(workdir)
         self.task_store = task_store  # 任务存储，用于自动认领
+        self.worktree_manager = worktree_manager  # s18: worktree 隔离
 
         self._teammates: dict[str, dict] = {}  # name → {thread, status, started_at}
         self._lock = threading.Lock()
@@ -195,25 +202,49 @@ class TeamManager:
         self._counter += 1
         return f"teammate_{self._counter:04d}"
 
-    def _build_teammate_registry(self, teammate_name: str) -> ToolRegistry:
+    def _build_teammate_registry(self, teammate_name: str, workdir: Path | None = None) -> ToolRegistry:
         """
         构建队友的工具注册表。
 
         包含: bash, read_file, write_file, edit_file, glob, send_message, check_inbox,
               list_tasks, claim_task, complete_task (自动认领所需)
         排除: task (不能递归派生), spawn_teammate (不能派生队友)
+
+        Args:
+            teammate_name: 队友名字
+            workdir: 可选，覆盖文件系统工具的工作目录（worktree 隔离时使用）
         """
         excluded = {"task", "spawn_teammate"}
+        # 文件系统工具在 worktree 模式下需要用新 workdir，重新创建
+        _fs_tools = {"bash", "read_file", "write_file", "edit_file", "glob"}
         registry = ToolRegistry()
 
         for defn, handler in self.parent_registry.iter_handlers():
-            if defn["name"] not in excluded:
-                registry.register(
-                    name=defn["name"],
-                    description=defn.get("description", ""),
-                    input_schema=dict(defn.get("input_schema", {})),
-                    handler=handler,
-                )
+            if defn["name"] in excluded:
+                continue
+            if workdir and defn["name"] in _fs_tools:
+                continue  # 跳过，下面用新 workdir 重建
+            registry.register(
+                name=defn["name"],
+                description=defn.get("description", ""),
+                input_schema=dict(defn.get("input_schema", {})),
+                handler=handler,
+            )
+
+        # worktree 模式: 用新 workdir 重建文件系统工具
+        if workdir:
+            from tools.bash import BASH_SCHEMA, make_bash_handler
+            from tools.file_ops import (
+                READ_SCHEMA, make_read_handler,
+                WRITE_SCHEMA, make_write_handler,
+                EDIT_SCHEMA, make_edit_handler,
+                GLOB_SCHEMA, make_glob_handler,
+            )
+            registry.register(**BASH_SCHEMA, handler=make_bash_handler(workdir))
+            registry.register(**READ_SCHEMA, handler=make_read_handler(workdir))
+            registry.register(**WRITE_SCHEMA, handler=make_write_handler(workdir))
+            registry.register(**EDIT_SCHEMA, handler=make_edit_handler(workdir))
+            registry.register(**GLOB_SCHEMA, handler=make_glob_handler(workdir))
 
         # 给队友也注册 send_message 和 check_inbox
         registry.register(
@@ -243,7 +274,14 @@ class TeamManager:
 
         return registry
 
-    def spawn(self, name: str | None, task_description: str, rounds: int = 10, idle_timeout: float = 60.0) -> str:
+    def spawn(
+        self,
+        name: str | None,
+        task_description: str,
+        rounds: int = 10,
+        idle_timeout: float = 60.0,
+        worktree_name: str | None = None,
+    ) -> str:
         """
         派生一个队友 agent 在独立线程中执行任务。
 
@@ -259,12 +297,21 @@ class TeamManager:
             task_description: 队友的任务描述
             rounds: 每个工作周期的安全轮次限制，默认 10
             idle_timeout: 空闲超时秒数，默认 60
+            worktree_name: 可选，为队友创建独立的 git worktree
 
         Returns:
             队友名字（用于后续 send_message / check_inbox）
         """
         if not name:
             name = self._next_name()
+
+        # s18: 创建 worktree（如果指定）
+        wt_path = None
+        if worktree_name and self.worktree_manager:
+            result = self.worktree_manager.create(worktree_name)
+            if isinstance(result, str) and result.startswith("Error"):
+                return result
+            wt_path = Path(result)
 
         with self._lock:
             if name in self._teammates:
@@ -274,10 +321,11 @@ class TeamManager:
                 "started_at": time.time(),
                 "task": task_description,
                 "lifecycle": "work",
+                "worktree": worktree_name,
             }
 
         # 构建队友的工具集和 agent loop
-        registry = self._build_teammate_registry(name)
+        registry = self._build_teammate_registry(name, workdir=wt_path)
 
         def run():
             """线程内: 队友的 agent loop (WORK → IDLE 循环)"""
@@ -350,6 +398,8 @@ class TeamManager:
                         claimed_id = auto_claim_task(self.task_store, name)
                         if claimed_id:
                             task = self.task_store.load(claimed_id)
+                            if not task:
+                                continue
 
                             with self._lock:
                                 self._teammates[name]["lifecycle"] = "work_claimed"
@@ -411,6 +461,11 @@ class TeamManager:
                 payload={"status": status, "task": task_description},
             )
 
+            # s18: 队友结束后清理 worktree（除非标记为 keep）
+            if worktree_name and self.worktree_manager:
+                if worktree_name not in self.worktree_manager._kept:
+                    self.worktree_manager.remove(worktree_name)
+
         thread = threading.Thread(target=run, daemon=True, name=f"teammate-{name}")
         thread.start()
 
@@ -467,6 +522,10 @@ SPAWN_TEAMMATE_SCHEMA = {
                 "type": "integer",
                 "description": "Max agent loop rounds for the teammate (default: 10).",
             },
+            "worktree": {
+                "type": "string",
+                "description": "Optional worktree name — teammate works in an isolated git worktree (.worktrees/<name>).",
+            },
         },
         "required": ["task"],
     },
@@ -518,12 +577,13 @@ CHECK_INBOX_SCHEMA = {
 def make_spawn_teammate_handler(team_manager: TeamManager):
     """构建 spawn_teammate 工具的 handler"""
 
-    def run_spawn_teammate(task: str, name: str | None = None, rounds: int = 10) -> str:
-        result_name = team_manager.spawn(name, task, rounds)
+    def run_spawn_teammate(task: str, name: str | None = None, rounds: int = 10, worktree: str | None = None) -> str:
+        result_name = team_manager.spawn(name, task, rounds, worktree_name=worktree)
         if result_name.startswith("Error"):
             return result_name
+        wt_info = f" in worktree '{worktree}'" if worktree else ""
         return (
-            f"Spawned teammate '{result_name}' with task:\n{task[:200]}\n\n"
+            f"Spawned teammate '{result_name}'{wt_info} with task:\n{task[:200]}\n\n"
             f"Use send_message(to='{result_name}', message=...) to communicate.\n"
             f"Use check_inbox() to receive their messages."
         )

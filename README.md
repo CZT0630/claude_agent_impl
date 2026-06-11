@@ -134,9 +134,9 @@ claude_agent_impl/
 │   ├── protocols.py            # s16: 团队协议
 │   └── autonomous.py           # s17: 自治 Agent (已合并入 tools/task.py)
 │
-├── worktree/                   # 工作区隔离
+├── worktree/                   # 工作区隔离 (已合并入 tools/worktree.py)
 │   ├── __init__.py
-│   └── manager.py              # s18: Git Worktree 管理
+│   └── manager.py              # s18: Git Worktree 管理 (已合并)
 │
 ├── mcp/                        # MCP 集成
 │   ├── __init__.py
@@ -172,7 +172,7 @@ claude_agent_impl/
 | s15 Agent Teams | teams/bus.py | ⬜ | 多 Agent 协作 |
 | s16 Team Protocols | teams/protocols.py | ⬜ | 团队协议 |
 | s17 Autonomous Agents | tools/task.py | ✅ | 自治 Agent (已合并) |
-| s18 Worktree Isolation | worktree/manager.py | ⬜ | 工作区隔离 |
+| s18 Worktree Isolation | tools/worktree.py | ✅ | 工作区隔离 |
 | s19 MCP Plugin | mcp/client.py | ⬜ | MCP 工具集成 |
 | s20 Comprehensive | main.py | ⬜ | 全机制整合 |
 

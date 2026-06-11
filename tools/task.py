@@ -21,6 +21,7 @@ class Task:
     status: str                      # pending | in_progress | completed
     owner: str | None = None         # Agent 名字 (多 agent 场景)
     blockedBy: list[str] = field(default_factory=list)  # 依赖的任务 ID 列表
+    worktree: str | None = None      # s18: 绑定的 worktree 名称
     created_at: float = field(default_factory=time.time)
     completed_at: float | None = None
 

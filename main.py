@@ -43,6 +43,11 @@ from tools.team_protocols import (  # s16: Team Protocols
     make_request_shutdown_handler, make_request_plan_handler,
     make_review_plan_handler, make_protocol_status_handler,
 )
+from tools.worktree import (  # s18: Worktree Isolation
+    WorktreeManager,
+    CREATE_WORKTREE_SCHEMA, REMOVE_WORKTREE_SCHEMA, KEEP_WORKTREE_SCHEMA,
+    make_worktree_handlers,
+)
 from permissions.pipeline import PermissionPipeline
 from hooks.manager import HookManager
 from skills.loader import SkillLoader, LOAD_SKILL_SCHEMA, make_load_skill_handler
@@ -93,14 +98,22 @@ max_tokens=config.max_tokens,
     registry.register(**LIST_CRONS_SCHEMA, handler=cron_handlers["list_crons"])
     registry.register(**CANCEL_CRON_SCHEMA, handler=cron_handlers["cancel_cron"])
 
+    # s18: Worktree 隔离 — 队友在独立 git worktree 中工作
+    worktree_mgr = WorktreeManager(config.workdir)
+    wt_handlers = make_worktree_handlers(worktree_mgr)
+    registry.register(**CREATE_WORKTREE_SCHEMA, handler=wt_handlers["create_worktree"])
+    registry.register(**REMOVE_WORKTREE_SCHEMA, handler=wt_handlers["remove_worktree"])
+    registry.register(**KEEP_WORKTREE_SCHEMA, handler=wt_handlers["keep_worktree"])
+
     # Agent Teams — 消息总线 + 文件邮箱 + 异步队友
-    # 传入 task_store 支持自动认领任务
+    # 传入 task_store 支持自动认领任务，worktree_mgr 支持目录隔离
     team_manager = TeamManager(
         client=client,
         model=config.model,
         workdir=config.workdir,
         parent_registry=registry,
         task_store=task_store,  # 自动认领所需
+        worktree_manager=worktree_mgr,  # s18: worktree 隔离
         max_tokens=config.max_tokens,
     )
     # Lead agent 的 send_message / check_inbox（sender_name="lead"）
@@ -139,6 +152,8 @@ max_tokens=config.max_tokens,
             "(minute hour day month weekday) to auto-trigger messages. "
             "Use list_crons to see scheduled tasks, cancel_cron to remove them. "
             "For parallel teamwork, use spawn_teammate to launch agents on subtasks. "
+            "Use spawn_teammate(worktree='name') to isolate a teammate in its own git worktree. "
+            "Use create_worktree/remove_worktree/keep_worktree to manage worktrees directly. "
             "Communicate via send_message/check_inbox. "
             "Use team_status to monitor teammates. "
             "Use request_shutdown to gracefully stop a teammate. "
