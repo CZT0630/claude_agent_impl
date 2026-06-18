@@ -27,6 +27,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Callable
 
 
 @dataclass
@@ -62,7 +63,12 @@ class BackgroundManager:
         self._counter += 1
         return f"bg_{int(time.time())}_{self._counter:04d}"
 
-    def start(self, command: str, timeout: int = 300) -> str:
+    def start(
+        self,
+        command: str,
+        timeout: int = 300,
+        executor: Callable[[str, int], str] | None = None,
+    ) -> str:
         """
         在后台线程中执行命令，立即返回 bg_id。
 
@@ -83,28 +89,32 @@ class BackgroundManager:
         task = BackgroundTask(bg_id=bg_id, command=command)
         self._tasks[bg_id] = task
 
+        def finish(output: str, failed: bool = False) -> None:
+            with self._lock:
+                task.output = output[:50000] if output else "(no output)"
+                task.status = "failed" if failed else "completed"
+                task.finished_at = time.time()
+
         def run():
             """线程内部: 执行命令，更新任务状态"""
             try:
-                r = subprocess.run(
-                    command, shell=True, cwd=self.workdir,
-                    capture_output=True, text=True, timeout=timeout,
-                )
-                output = (r.stdout + r.stderr).strip()
-                with self._lock:  # 加锁：多线程同时写 _tasks 时不会冲突
-                    task.output = output[:50000] if output else "(no output)"
-                    task.status = "completed"
-                    task.finished_at = time.time()
+                if executor:
+                    output = executor(command, timeout)
+                    failed = output.startswith("Error:")
+                else:
+                    r = subprocess.run(
+                        command, shell=True, cwd=self.workdir,
+                        capture_output=True, text=True, timeout=timeout,
+                    )
+                    output = (r.stdout + r.stderr).strip()
+                    failed = r.returncode != 0
+                finish(output, failed)
             except subprocess.TimeoutExpired:
-                with self._lock:
-                    task.output = f"Error: Timeout ({timeout}s)"
-                    task.status = "failed"
-                    task.finished_at = time.time()
+                finish(f"Error: Timeout ({timeout}s)", failed=True)
             except (FileNotFoundError, OSError) as e:
-                with self._lock:
-                    task.output = f"Error: {e}"
-                    task.status = "failed"
-                    task.finished_at = time.time()
+                finish(f"Error: {e}", failed=True)
+            except Exception as e:
+                finish(f"Error: {e}", failed=True)
 
         # daemon=True: 主进程退出时线程自动死，不留孤儿
         thread = threading.Thread(target=run, daemon=True)

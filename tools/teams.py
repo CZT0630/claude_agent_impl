@@ -50,7 +50,7 @@ import time
 from pathlib import Path
 
 from anthropic import Anthropic
-from agent.loop import AgentLoop
+# Lazy import: agent.loop ↔ tools.teams 是循环依赖，AgentLoop 在函数体内按需导入
 from tools.registry import ToolRegistry
 from tools.task import TaskStore, LIST_TASKS_SCHEMA, CLAIM_TASK_SCHEMA, COMPLETE_TASK_SCHEMA, make_task_handlers, auto_claim_task
 from tools.worktree import WorktreeManager
@@ -329,6 +329,7 @@ class TeamManager:
 
         def run():
             """线程内: 队友的 agent loop (WORK → IDLE 循环)"""
+            from agent.loop import AgentLoop  # 延迟导入，打破循环依赖
             try:
                 # ── WORK 阶段: 执行初始任务 ──
                 sub_agent = AgentLoop(

@@ -16,6 +16,7 @@ class Config:
     workdir: Path
     max_tokens: int = 8000
     fallback_model: str | None = None
+    sandbox_level: str = "auto"
 
     @classmethod
     def from_env(cls, env_path: Path | None = None) -> "Config":
@@ -30,6 +31,7 @@ class Config:
         workdir = Path.cwd()
         max_tokens = int(os.getenv("MAX_TOKENS", "8000"))
         fallback_model = os.getenv("FALLBACK_MODEL") or None
+        sandbox_level = os.getenv("SANDBOX_LEVEL", "auto")
 
         if not api_key:
             raise ValueError("ANTHROPIC_API_KEY not set in .env")
@@ -41,4 +43,5 @@ class Config:
             workdir=workdir,
             max_tokens=max_tokens,
             fallback_model=fallback_model,
+            sandbox_level=sandbox_level,
         )

@@ -70,7 +70,7 @@ def build_agent(config: Config) -> AgentLoop:
     # 注册工具
     registry = ToolRegistry()
     # s13: bash handler 接收 bg_manager，支持 run_in_background 参数
-    registry.register(**BASH_SCHEMA, handler=make_bash_handler(config.workdir, bg_manager))
+    registry.register(**BASH_SCHEMA, handler=make_bash_handler(config.workdir, bg_manager, config.sandbox_level))
     registry.register(**READ_SCHEMA, handler=make_read_handler(config.workdir))
     registry.register(**WRITE_SCHEMA, handler=make_write_handler(config.workdir))
     registry.register(**EDIT_SCHEMA, handler=make_edit_handler(config.workdir))

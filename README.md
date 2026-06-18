@@ -175,6 +175,7 @@ claude_agent_impl/
 | s18 Worktree Isolation | tools/worktree.py | ✅ | 工作区隔离 |
 | s19 MCP Plugin | mcp/client.py | ⬜ | MCP 工具集成 |
 | s20 Comprehensive | main.py | ⬜ | 全机制整合 |
+| s21 Command Sandbox | tools/sandbox.py | ✅ | 跨平台命令沙箱 |
 
 ## 学习路径
 

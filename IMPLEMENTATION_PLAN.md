@@ -1104,43 +1104,54 @@ def assemble_tool_pool(builtin_tools, mcp_connections):
 
 **目标**: 在 `run_bash` 层面插入进程级隔离，Agent 即使被 prompt injection 操纵也无法破坏宿主机
 
-**三级沙箱策略**:
+**跨平台自动选择策略**:
 
 ```
-Level 0 (当前): subprocess.run(shell=True) ← 宿主机裸跑
-
-Level 1 (轻量): subprocess + 环境限制
-    → env 清空敏感变量 (SSH_KEY, AWS_SECRET, ...)
-    → 工作目录 chdir 锁定
-    → resource 模块限制 CPU/内存/文件大小
-
-Level 2 (容器): Docker 容器执行
-    → docker run --rm -v workdir:/work -w /work
-    → --network=none (可选禁网)
-    → --memory=512m --cpus=1 --pids-limit=256
+Sandbox.execute(command, workdir)
+│
+├─ bwrap 存在？ (Linux / WSL2)
+│  └─ Yes → namespace 隔离：文件只读 + 网络隔离
+│
+├─ macOS？
+│  └─ Yes → sandbox-exec：文件写入受控 + syscall 过滤
+│
+├─ Windows？
+│  └─ Yes → Job Object：内存限制 + 进程数限制 + 环境清理
+│
+├─ Docker 存在？ (Linux 没装 bwrap 时的备选)
+│  └─ Yes → 容器隔离：完全隔离
+│
+├─ resource 模块可用？
+│  └─ Yes → resource 限制 + 环境清理
+│
+└─ 兜底 → 环境变量清理 + 命令黑名单
 ```
 
-**架构**:
+**优先级原则**: 优先用本平台原生方案（零开销、零依赖），Docker 作为跨平台兜底
 
-```
-agent_loop
-    ↓ tool_use: bash(command)
-    ↓
-Sandbox.execute(command)
-    ├─ Level 0 → subprocess.run(shell=True)          ← 原始行为
-    ├─ Level 1 → subprocess.run(env=clean_env, ...)   ← 受限子进程
-    └─ Level 2 → docker run ... sh -c command         ← 容器隔离
-```
+**各方案对比**:
 
-**配置**: `SANDBOX_LEVEL=0|1|2` 通过 `.env` 或命令行参数控制
+| 方案 | 平台 | 文件隔离 | 网络隔离 | 资源限制 | 启动开销 | 额外依赖 |
+|------|------|----------|----------|----------|----------|----------|
+| bwrap | Linux | ✅ 只读根 | ✅ unshare | ✅ | ~5ms | bwrap 包 |
+| sandbox-exec | macOS | ✅ profile | ❌ | ✅ | ~5ms | 系统自带 |
+| Job Object | Windows | ❌ | ❌ | ✅ 内存/CPU/进程 | ~0ms | 系统自带 |
+| Docker | 跨平台 | ✅ 完全 | ✅ network=none | ✅ | ~500ms | Docker |
+| resource | Linux/macOS | ❌ | ❌ | ✅ | ~0ms | 无 |
+| 兜底 | 全平台 | ❌ | ❌ | ❌ | ~0ms | 无 |
+
+**配置**: `SANDBOX_LEVEL=auto|off` 通过 `.env` 控制
+- `auto` (默认): 自动检测平台选最优方案
+- `off`: 关闭沙箱，裸跑（调试用）
 
 **关键概念**:
+- 新增 `tools/sandbox.py`，封装 `Sandbox` 类，自动检测平台选方案
 - 只改 `tools/bash.py` 的 `make_bash_handler`，将 `Sandbox.execute()` 替代 `subprocess.run()`，其他模块零改动
-- Level 1 通过 `env` 清空 + `resource` 限制实现轻量隔离（无需 Docker）
-- Level 2 通过 `--network=none` 实现网络隔离，`--memory` 防内存炸弹
-- `preexec_fn=set_limits` 在子进程中设置资源限制，不影响主进程
+- 各平台方案共享同一套环境变量清理和命令黑名单
+- Windows Job Object 通过 `ctypes` 调用 Win32 API，无需额外依赖
 
-**新增文件**: `s21_sandbox/code.py`, `s21_sandbox/Dockerfile`
+**新增文件**: `tools/sandbox.py`
+**修改文件**: `tools/bash.py`, `.env.example`, `agent/config.py`
 
 ---
 
