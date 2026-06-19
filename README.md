@@ -177,6 +177,7 @@ claude_agent_impl/
 | s20 Comprehensive | main.py | ⬜ | 全机制整合 |
 | s21 Command Sandbox | tools/sandbox.py | ✅ | 跨平台命令沙箱 |
 | s22 Enterprise Baseline | tools/result.py, tests/, docs/threat-model.md | ✅ | 安全回归、最小 ToolResult、威胁模型 |
+| s23 Runtime Skeleton | agent/state.py, agent/interceptor.py, agent/runtime.py | ✅ | LoopState、Pipeline、Interceptor |
 
 ## s22 Enterprise Baseline
 
@@ -188,6 +189,23 @@ D:\Language\anaconda3\envs\tacn\python.exe -m pytest tests/security tests/runtim
 s22 保持现有 agent loop 的字符串返回兼容，同时新增最小 `ToolResult` 结构，供测试、审计和后续 Runtime Event 使用。本阶段锁住前台 bash、后台 bash、环境变量清理、危险命令拦截、输出截断、未知工具和 handler 异常这些 P0 风险。
 
 CI 门禁位于 `.github/workflows/s22-baseline.yml`，push / pull_request 时自动运行同一组基线测试。
+
+## s23 Runtime Skeleton
+
+```powershell
+# 运行 Runtime 骨架、拦截器和 s22 基线测试
+D:\Language\anaconda3\envs\tacn\python.exe -m pytest tests/runtime tests/security
+```
+
+s23 新增 `LoopState`、`AgentRuntime` 和 `InterceptorChain`。当前 CLI 已通过 `AgentRuntime.execute(state)` 调用原有 `AgentLoop`，模型调用和工具调用都经过默认空拦截链；默认行为不变，但后续 Trace、策略、限流、审计已经有统一挂载点。
+
+阅读这部分代码时可以按这个顺序看：
+
+1. `main.py`：组装工具、hooks、prompt、runtime，并为整个 CLI 会话生成一个稳定的 `session_id`。
+2. `agent/runtime.py`：定义 `preflight -> build_context -> react_loop -> finalize` 生命周期。
+3. `agent/state.py`：记录一次 turn 的 ID、状态、phase 耗时、模型调用和工具调用事实。
+4. `agent/interceptor.py`：提供模型/工具调用的横切扩展点。
+5. `agent/loop.py`：保留原有 ReAct 主循环，只在模型和工具调用处接入 state 与 interceptor。
 
 ## 学习路径
 

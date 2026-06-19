@@ -25,6 +25,8 @@ from hooks.manager import HookManager
 from context.compact import CompactPipeline
 from memory.manager import MemoryManager
 from prompt.assembler import PromptAssembler
+from agent.interceptor import InterceptorChain
+from agent.state import LoopState
 from agent.recovery import (
     RecoveryState,
     handle_max_tokens,
@@ -52,6 +54,7 @@ class AgentLoop:
         max_tokens: int = 8000,
         max_rounds: int | None = None,
         fallback_model: str | None = None,
+        interceptors: InterceptorChain | None = None,
     ):
         self.client = client
         self.model = model
@@ -66,6 +69,7 @@ class AgentLoop:
         self.max_tokens = max_tokens
         self.max_rounds = max_rounds
         self.rounds_since_todo = 0
+        self.interceptors = interceptors or InterceptorChain()
 
         # s11: 错误恢复状态
         self.recovery = RecoveryState()
@@ -100,7 +104,12 @@ class AgentLoop:
 
     # ── 核心 LLM 调用（带恢复） ────────────────────────────────────
 
-    def _call_llm(self, system_prompt: str, messages: list):
+    def _call_llm(
+        self,
+        system_prompt: str,
+        messages: list,
+        state: LoopState | None = None,
+    ):
         """
         调用 LLM，内置三条恢复路径。
 
@@ -118,15 +127,28 @@ class AgentLoop:
 
         while True:
             model = self._get_current_model()
+            request = {
+                "model": model,
+                "system": system_prompt,
+                "messages": messages,
+                "tools": self.tools.get_definitions(),
+                "max_tokens": current_max,
+                "state": state,
+            }
 
             try:
-                response = self.client.messages.create(
-                    model=model,
-                    system=system_prompt,
-                    messages=messages,
-                    tools=self.tools.get_definitions(),
-                    max_tokens=current_max,
+                response = self.interceptors.intercept_model(
+                    request,
+                    lambda req: self.client.messages.create(
+                        model=req["model"],
+                        system=req["system"],
+                        messages=req["messages"],
+                        tools=req["tools"],
+                        max_tokens=req["max_tokens"],
+                    ),
                 )
+                if state:
+                    state.record_model_call(request, response=response)
 
                 # 调用成功，重置 529 计数
                 self.recovery.on_success()
@@ -149,6 +171,8 @@ class AgentLoop:
                 return response
 
             except Exception as e:
+                if state:
+                    state.record_model_call(request, error=e)
                 error_type = classify_error(e)
 
                 # ── Path 2: prompt_too_long ──
@@ -184,7 +208,7 @@ class AgentLoop:
 
     # ── 主循环 ─────────────────────────────────────────────────────
 
-    def run(self, messages: list) -> list:
+    def run(self, messages: list, state: LoopState | None = None) -> list:
         for _ in range(self.max_rounds or 10**9):
             self.rounds_since_todo += 1
 
@@ -247,7 +271,7 @@ class AgentLoop:
                 messages.append({"role": "user", "content": injected})
 
             # s11: 调用 LLM（带三条恢复路径）
-            response = self._call_llm(system_prompt, messages)
+            response = self._call_llm(system_prompt, messages, state=state)
 
             messages.append({"role": "assistant", "content": response.content})
 
@@ -287,11 +311,29 @@ class AgentLoop:
                         continue
 
                     # 执行工具
-                    output = self.tools.execute(block.name, block.input)
+                    tool_request = {
+                        "name": block.name,
+                        "input": block.input,
+                        "block": block,
+                        "state": state,
+                    }
+                    output = self.interceptors.intercept_tool(
+                        tool_request,
+                        lambda req: self.tools.execute(req["name"], req["input"]),
+                    )
 
                     # s08: 大输出持久化
                     if self.compact:
                         output = self.compact.truncate_output(str(output), block.id)
+
+                    if state:
+                        state.record_tool_event(
+                            block.name,
+                            output,
+                            tool_use_id=block.id,
+                            ok=not str(output).startswith("Error:"),
+                            input=block.input,
+                        )
 
                     # PostToolUse hook
                     self.hooks.trigger("PostToolUse", block, output)
