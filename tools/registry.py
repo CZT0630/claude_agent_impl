@@ -7,6 +7,8 @@
 from typing import Callable
 from anthropic.types import ToolParam
 
+from tools.result import ToolResult
+
 
 class ToolRegistry:
     def __init__(self):
@@ -30,10 +32,21 @@ class ToolRegistry:
             yield defn, self._handlers[defn["name"]]
 
     def execute(self, name: str, args: dict) -> str:
+        return self.execute_result(name, args).to_text()
+
+    def execute_result(self, name: str, args: dict) -> ToolResult:
         handler = self._handlers.get(name)
         if not handler:
-            return f"Unknown tool: {name}"
+            return ToolResult.failure(
+                "UNKNOWN_TOOL",
+                stderr=f"Unknown tool: {name}",
+                metadata={"tool": name},
+            )
         try:
-            return handler(**args)
+            return ToolResult.from_output(handler(**args), metadata={"tool": name})
         except Exception as e:
-            return f"Error: {e}"
+            return ToolResult.failure(
+                "TOOL_EXCEPTION",
+                stderr=str(e),
+                metadata={"tool": name, "exception_type": type(e).__name__},
+            )

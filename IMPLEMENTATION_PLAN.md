@@ -55,18 +55,26 @@ MODEL_ID=claude-sonnet-4-6
 
 ---
 
-## 九大阶段 · 28 个模块 总览
+## 基础模块 + 企业级升级路线总览
 
 ```
-阶段一: 让 Agent 能动手          s01 → s02 → s03 → s04
-阶段二: 做复杂任务              s05 → s06 → s07 → s08
-阶段三: 记住和恢复              s09 → s10 → s11
-阶段四: 让任务长期运行           s12 → s13 → s14
-阶段五: 让多个 Agent 协作        s15 → s16 → s17 → s18
-阶段六: 接外部能力合体           s19 → s20
-阶段七: 安全加固                 s21 → s22
-阶段八: 工具生态扩展             s23 → s24 → s25
-阶段九: 会话与交互               s26 → s27 → s28
+基础一: 让 Agent 能动手          s01 -> s02 -> s03 -> s04
+基础二: 做复杂任务              s05 -> s06 -> s07 -> s08
+基础三: 记住和恢复              s09 -> s10 -> s11
+基础四: 让任务长期运行           s12 -> s13 -> s14
+基础五: 让多个 Agent 协作        s15 -> s16 -> s17 -> s18
+基础六: 接外部能力合体           s19 -> s20
+基础七: 安全加固                 s21
+企业级一: 质量与安全基线         s22
+企业级二: Runtime 骨架           s23
+企业级三: 结构化事件             s24
+企业级四: 持久化                 s25
+企业级五: 可观测性               s26
+企业级六: 安全多租户             s27
+企业级七: 上下文治理             s28
+企业级八: 技能与工具治理         s29
+企业级九: 知识库与 RAG           s30
+企业级十: 服务化、控制台、评测    s31
 ```
 
 ---
@@ -1098,7 +1106,7 @@ def assemble_tool_pool(builtin_tools, mcp_connections):
 
 ---
 
-## 阶段七：安全加固（s21-s22）
+## 阶段七：安全加固（s21）
 
 ### s21 Command Sandbox — "命令在笼子里跑"
 
@@ -1155,302 +1163,151 @@ Sandbox.execute(command, workdir)
 
 ---
 
-### s22 Permission Modes — "该问的问，不该问的别问"
+## 企业级升级路线（s22-s31）
 
-**目标**: 多级权限模式，平衡安全和效率
+s21 完成后，不再继续旧的个人版 s22-s26/s27/s28。后续直接进入企业级 Agent Runtime 路线，把权限、工具、会话、UI、RAG、评测都放到统一 Runtime 边界内。
 
-**三种模式**:
+### s22 Enterprise Baseline - 质量与安全基线
 
-```
-Mode 1: ask (当前行为)
-  → 危险操作问用户 y/N
+**目标**: 补齐安全回归、运行时测试、威胁模型和最小 ToolResult，确保后续重构不会让沙箱、权限、后台任务退化。
 
-Mode 2: auto-accept (全允许)
-  → 跳过所有 Gate 2/3 检查，调试/可信环境用
+**关键交付**:
+- `tests/security/`: bash 沙箱、后台 bash、危险命令、环境变量清理
+- `tests/runtime/`: 工具失败、超时、取消、输出截断
+- `docs/threat-model.md`: 命令注入、SSRF、敏感 env、越权文件、资源耗尽
+- 最小 `ToolResult(ok, stdout, stderr, error_code, metadata)`
 
-Mode 3: allowed-tools (白名单)
-  → 只允许指定工具自动执行，其余仍需确认
-  → 例: "bash:read, read_file, glob" = 读操作自动放行
-```
-
-**Slash 命令集成**:
-```
-/permissions ask              → 切换到 ask 模式
-/permissions auto             → 切换到 auto-accept
-/permissions allow bash:read  → bash 的读操作自动允许
-/permissions status           → 查看当前模式和白名单
-```
-
-**关键概念**:
-- Gate 1 硬拒绝**始终生效**，auto-accept 也不能绕过
-- 白名单格式 `tool:pattern`，如 `bash:read` 表示包含 "read" 的 bash 命令自动放行
-- 与 s03 的 PermissionPipeline 是**同一类的扩展**，替换而非新增
-
-**新增文件**: `s22_permission_modes/code.py`
+**原理**: 企业级升级先固定底线，再拆架构。安全测试是防止未来重构把旧漏洞带回来的保护网。
 
 ---
 
-## 阶段八：工具生态扩展（s23-s25）
+### s23 Runtime Skeleton - LoopState + Pipeline + Interceptor
 
-### s23 Code Search & Git — "在代码里找东西，管版本"
+**目标**: 把单体 agent loop 升级为可治理 Runtime。
 
-**目标**: 添加 grep 代码搜索 + git 操作工具集
+**关键交付**:
+- `LoopState`: session、turn、messages、tool_events、token_usage、error
+- `AgentRuntime.execute(state)`: CLI/API/后台任务共享入口
+- Pipeline: preflight -> build_context -> react_loop -> finalize
+- ModelInterceptor / ToolInterceptor
 
-**新增工具**:
-
-| 工具 | 功能 | Claude Code 对应 |
-|------|------|-----------------|
-| `grep` | 正则搜索文件内容（ripgrep 驱动） | `Grep` |
-| `git_status` | 显示工作区状态 | 内置 git 集成 |
-| `git_diff` | 显示变更差异 | 同上 |
-| `git_log` | 显示提交历史 | 同上 |
-| `git_commit` | 提交变更 | 同上 |
-| `git_branch` | 分支操作（创建/切换/列出） | 同上 |
-
-**grep 工具接口**:
-
-| 参数 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| `pattern` | string | ✅ | 正则表达式 |
-| `path` | string | — | 搜索目录或文件，默认 "." |
-| `glob` | string | — | 文件过滤，如 "*.py" |
-| `context` | int | — | 匹配行前后显示的上下文行数 |
-
-**git_diff 工具接口**:
-
-| 参数 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| `path` | string | — | 文件或目录 |
-| `staged` | boolean | — | 是否显示暂存区变更 |
-
-**关键概念**:
-- `grep` 调用 ripgrep (`rg`)，需预装；找不到时 fallback 到 Python `re` 模块扫描
-- git 工具走 `subprocess.run(["git", ...])`，不走 shell，避免注入风险
-- `git_commit` 受权限管线控制（Gate 2: 写操作需确认）
-- 所有输出截断到 50000 字符，与 s08 L3 budget 对齐
-
-**新增文件**: `s23_code_search/code.py`
+**原理**: 状态集中后才能持久化，生命周期分段后才能治理，拦截器让权限、Trace、限流、超时不污染主循环。
 
 ---
 
-### s24 Web Tools — "连上互联网"
+### s24 Structured Events - ToolResult 与事件流
 
-**目标**: Web 搜索 + 页面抓取，让 Agent 能查阅文档、搜索解决方案
+**目标**: 把工具返回、模型调用、审批、错误、产物引用变成结构化事件。
 
-**新增工具**:
+**关键交付**:
+- 完整 `ToolResult`
+- Runtime Event: run/model/tool/approval/artifact/error
+- `artifact_refs`: 大输出不直接进入上下文
+- CLI 渲染层和事件结构分离
 
-| 工具 | 功能 | Claude Code 对应 |
-|------|------|-----------------|
-| `web_search` | 搜索引擎查询 | `WebSearch` |
-| `web_fetch` | 抓取 URL 内容，转为文本/Markdown | `WebFetch` |
-
-**架构**:
-
-```
-web_search("query")  → 搜索 API (Brave/SerpAPI) → 标题 + URL + 摘要
-web_fetch(url)       → httpx.get → HTML → 文本/Markdown → 截断 50000 字符
-```
-
-**web_search 接口**:
-
-| 参数 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| `query` | string | ✅ | 搜索关键词 |
-| `max_results` | int | — | 最大结果数，默认 5 |
-
-**web_fetch 接口**:
-
-| 参数 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| `url` | string | ✅ | 目标 URL |
-| `format` | string | — | "text"（默认）或 "markdown" |
-
-**配置**: `SEARCH_API_KEY` 通过 `.env` 配置（Brave/SerpAPI key）
-
-**关键概念**:
-- `web_search` 需要搜索 API key，`web_fetch` 直接 HTTP GET 不需要额外 key
-- HTML → Markdown 可用 `markdownify` 或 `html2text` 库
-- `web_fetch` 应加入权限管线：检查 URL 是否在内网（防 SSRF）
-
-**新增文件**: `s24_web_tools/code.py`
+**原理**: 文本输出适合人看，结构化事件适合系统消费。持久化、前端、审计、评测都依赖同一条事件流。
 
 ---
 
-### s25 Multimedia & Notebook — "不只看文本"
+### s25 Persistence - 会话、状态与审计落库
 
-**目标**: 多模态读取（图片/PDF）+ Jupyter Notebook 支持
+**目标**: 将会话从 JSONL/内存升级为可查询、可恢复、可审计的数据模型。
 
-**新增工具**:
+**关键交付**:
+- sessions、turns、messages、model_calls、tool_calls
+- artifacts、audit_events、token_usage
+- Repository 层，SQLite 本地开发，PostgreSQL 企业部署
+- Redis 只做缓存、锁和短期状态
 
-| 工具 | 功能 | Claude Code 对应 |
-|------|------|-----------------|
-| `read_image` | 读取图片，返回 vision content block | `Read` (images) |
-| `read_pdf` | 读取 PDF 指定页面，转为文本 | `Read` (PDFs) |
-| `notebook_read` | 读取 .ipynb 为 cell 结构 | `Read` (notebooks) |
-| `notebook_edit` | 编辑 notebook 中的 cell | `NotebookEdit` |
-
-**read_image 接口**:
-
-| 参数 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| `path` | string | ✅ | 图片路径（png/jpg/gif/webp） |
-
-返回 Anthropic vision 格式的 `image` content block（base64 编码），非纯文本。
-
-**read_pdf 接口**:
-
-| 参数 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| `path` | string | ✅ | PDF 路径 |
-| `pages` | string | — | 页码范围，如 "1-5", "3", "1-3,7" |
-
-**notebook_edit 接口**:
-
-| 参数 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| `path` | string | ✅ | .ipynb 路径 |
-| `cell_index` | int | ✅ | Cell 索引（0-based） |
-| `source` | string | ✅ | 新的 cell 内容 |
-| `cell_type` | string | — | "code" 或 "markdown" |
-
-**关键概念**:
-- 图片通过 Anthropic vision API 发送，需在 `agent/loop.py` 中支持 image content block
-- PDF 用 `PyMuPDF` (`fitz`) 提取文本，需 `pip install pymupdf`
-- Notebook 本质是 JSON，直接解析 `cells` 数组
-- 图片大小限制 20MB，PDF 页数限制 20 页
-
-**新增文件**: `s25_multimedia/code.py`
+**原理**: 企业级持久化保存的是运行时事实，不只是聊天记录。
 
 ---
 
-## 阶段九：会话与交互（s26-s28）
+### s26 Observability - Trace、日志与指标
 
-### s26 Session Management — "退出了还能回来"
+**目标**: 让每次执行可追踪、可排障、可度量。
 
-**目标**: 会话持久化 + 恢复 + Token 成本追踪
+**关键交付**:
+- OpenTelemetry trace/span
+- JSON 结构化日志
+- Prometheus 指标
+- SSE 事件流
+- trace_id / turn_id 全链路传递
 
-**会话存储结构**:
-
-```
-.sessions/
-  {session_id}.jsonl      ← 完整消息记录（每行一条 JSON message）
-  {session_id}.meta.json  ← 元数据（创建时间、模型、token 用量）
-  latest                   ← 文本文件，记录最近一次 session_id
-```
-
-**SessionManager 接口**:
-
-| 方法 | 说明 |
-|------|------|
-| `create(session_id?)` | 创建新会话，返回 session_id |
-| `save_turn(session_id, message)` | 追加一条消息到 JSONL |
-| `load(session_id)` | 从 JSONL 恢复完整对话 |
-| `list_sessions()` | 列出所有会话（按时间倒序） |
-| `get_latest()` | 获取最近一次会话 ID |
-
-**TokenTracker 接口**:
-
-| 方法 | 说明 |
-|------|------|
-| `record(model, usage)` | 记录一次 LLM 调用的 token 用量 |
-| `cost(model)` | 计算累计费用 (USD) |
-| `summary(model)` | 返回可读的用量/费用摘要 |
-
-**关键概念**:
-- 会话用 JSONL 格式追加写入，不覆盖，不怕崩溃
-- `latest` 文件记录最近会话 ID，实现 `/resume` 自动恢复
-- TokenTracker 在每次 LLM 调用后记录，通过 `response.usage` 获取
-- 费用计算基于官方定价表，可通过 `.env` 的 `CUSTOM_PRICING` 覆盖
-
-**新增文件**: `s26_session/code.py`
+**原理**: 持久化回答发生过什么，可观测性回答为什么这样发生。
 
 ---
 
-### s27 Project Instructions — "项目有自己的规矩"
+### s27 Security Tenant Policy - 认证、多租户与策略
 
-**目标**: 自动加载项目级指令文件，等同于 Claude Code 的 `CLAUDE.md`
+**目标**: 引入身份、租户、RBAC、工具策略、文件路径策略、网络策略。
 
-**搜索顺序**（按优先级合并）:
+**关键交付**:
+- `IdentityContext(user_id, tenant_id, roles, scopes)`
+- `PolicyEngine` / `SecurityGuard`
+- tool allowlist、path policy、network policy、approval policy
+- Secret redaction 与 env allowlist
 
-```
-1. .claude/CLAUDE.md        ← 项目级（最优先，提交到 git）
-2. CLAUDE.md                ← 项目根目录（通用）
-3. .claude/CLAUDE.local.md  ← 本地覆盖（不提交 git，个人配置）
-4. ~/.claude/CLAUDE.md      ← 用户级（全局默认）
-```
-
-**文件格式**: 纯 Markdown，无需 frontmatter
-
-**PromptAssembler 集成**:
-
-注册为 `project_instructions` 段落，priority=5（identity 之后、behavior 之前），条件加载。
-
-```
-[priority 0]  identity:              "You are a coding agent at /workdir."
-[priority 5]  project_instructions:  "不要修改 migrations/..."
-[priority 10] behavior:              "Use tools to solve tasks..."
-[priority 20] skills:                "Skills available: ..."
-[priority 30] memory:                "Relevant memories..."
-```
-
-**关键概念**:
-- 多个文件按优先级合并，都是追加不覆盖
-- `.claude/CLAUDE.local.md` 适合个人配置（已在 .gitignore 中）
-- 加载结果缓存，同一会话内只读一次磁盘
-
-**新增文件**: `s27_project_instructions/code.py`
+**原理**: 企业权限决策必须包含谁、在哪个租户、对什么资源、执行什么动作。
 
 ---
 
-### s28 Slash Commands — "快捷操作入口"
+### s28 Context Governance - 上下文治理工业化
 
-**目标**: 内置斜杠命令，提供交互式控制和快捷操作
+**目标**: 统一治理 system、项目指令、memory、history、RAG、tool summary。
 
-**命令清单**:
+**关键交付**:
+- `ContextGovernor`
+- `TokenBudget`
+- `CompactEngine`
+- Memory / Knowledge / Artifact 边界
+- Prompt section priority 和来源追踪
 
-| 命令 | 功能 | Claude Code 对应 |
-|------|------|-----------------|
-| `/help` | 显示所有命令帮助 | `/help` |
-| `/clear` | 清空对话历史，重新开始 | `/clear` |
-| `/compact [strategy]` | 手动触发上下文压缩 | `/compact` |
-| `/cost` | 显示 token 用量和费用 | `/cost` |
-| `/sessions` | 列出历史会话 | — |
-| `/resume [id]` | 恢复指定会话（无 id 则恢复最近） | — |
-| `/permissions [mode]` | 查看/切换权限模式 | `/allowed-tools` |
-| `/memory` | 显示当前记忆文件列表 | `/memory` |
-
-**架构**:
-
-```
-用户输入
-    ↓
-SlashCommands.handle(text)
-    ├─ 以 "/" 开头 → 匹配命令 → 执行 → 返回 True（不送 LLM）
-    └─ 不以 "/" 开头 → 返回 False → 正常送 LLM
-```
-
-**与 main.py 的集成**:
-
-```python
-slash = SlashCommands(agent, session_mgr, token_tracker, permissions)
-while True:
-    query = input(">> ")
-    if slash.handle(query):   # 斜杠命令已处理，跳过 LLM
-        continue
-    agent.run(history)
-```
-
-**关键概念**:
-- 斜杠命令在 CLI 入口拦截，不送入 LLM，不消耗 token
-- `/clear` 清空内存中的 messages，但不影响磁盘上的会话文件
-- `/compact` 调用 s08 的压缩管线，等同于自动压缩但由用户手动触发
-- `/resume` 从 `.sessions/` 加载 JSONL，替换当前 messages
-- `/permissions` 支持三种模式切换，与 s22 的 PermissionPipeline 联动
-- 命令匹配用精确前缀，不支持模糊匹配（避免歧义）
-
-**新增文件**: `s28_slash_commands/code.py`
+**原理**: 上下文是预算，不是垃圾桶。进入 prompt 的每段内容都必须能解释来源和价值。
 
 ---
+
+### s29 Skill Runtime - 技能与工具治理
+
+**目标**: 把 grep、git、web、notebook、PDF 等能力纳入 Skill Manifest 和工具注册表。
+
+**关键交付**:
+- Tool/Skill Manifest
+- Registry、schema、version、signature
+- 工具权限声明和策略联动
+- 禁用/启用、回滚、热更新
+
+**原理**: 工具生态也是供应链。工具越多，越需要声明、授权、审计、回滚。
+
+---
+
+### s30 Knowledge RAG - 知识库与 Artifact Pipeline
+
+**目标**: 建立文档摄取、解析、索引、检索、引用和质量评估体系。
+
+**关键交付**:
+- ArtifactParser: PDF、网页、Notebook、图片 OCR、工具大输出
+- chunk -> metadata -> index -> retrieve -> rerank
+- keyword + vector 混合检索
+- citation/source metadata
+- RAG 评测集
+
+**原理**: Memory 是偏好和长期事实，RAG 是可引用知识。两者混用会污染上下文。
+
+---
+
+### s31 Service UI Eval - 服务化、控制台与评测闭环
+
+**目标**: 提供 API、Worker、前端控制台、审批流、评测和 Badcase 闭环。
+
+**关键交付**:
+- FastAPI session/message/run/approval/artifact API
+- Worker + Queue
+- SSE/WebSocket 前端事件流
+- Session timeline、tool timeline、cost panel、audit view
+- Eval suite + badcase registry
+
+**原理**: 企业级 Agent 的终点不是更自动，而是更可控、更可评估、更能持续改进。
 
 ## 推荐学习节奏
 
@@ -1479,17 +1336,21 @@ Week 6:  s19 → s20                MCP + 全机制整合
          重点: 理解外部能力集成
          产出: 完整的 agent harness
 
-Week 7:  s21 → s22                沙箱 + 权限模式
-         重点: 理解安全执行和权限分级
-         产出: 能安全执行命令的 agent
+Week 7:  s21 -> s22 -> s23        沙箱验证 + 质量基线 + Runtime 骨架
+         重点: 理解安全回归、LoopState、Pipeline、Interceptor
+         产出: 有测试保护、可插拔、可治理的 agent loop
 
-Week 8:  s23 → s24 → s25          代码搜索 + Web + 多模态
-         重点: 理解工具生态扩展
-         产出: 能搜索代码、查阅文档、读图/PDF 的 agent
+Week 8:  s24 -> s25 -> s26        结构化事件 + 持久化 + 可观测
+         重点: 理解 ToolResult、Runtime Event、Repository、Trace
+         产出: 可恢复、可审计、可排障的 agent runtime
 
-Week 9:  s26 → s27 → s28          会话管理 + 项目指令 + 斜杠命令
-         重点: 理解持久化交互和用户体验
-         产出: 接近 Claude Code 生产级体验的 agent
+Week 9:  s27 -> s28 -> s29        安全多租户 + 上下文治理 + 技能治理
+         重点: 理解身份租户、PolicyEngine、TokenBudget、Skill Manifest
+         产出: 权限清晰、上下文稳定、工具受控的 runtime
+
+Week 10: s30 -> s31               RAG 知识库 + 服务化控制台 + 评测闭环
+         重点: 理解 Artifact Pipeline、混合检索、审批、Badcase 回归
+         产出: 能服务化、能被人监督、能持续改进的企业级 agent
 ```
 
 ## 每章学习步骤
@@ -1515,7 +1376,7 @@ your-agent/
   .tasks/                   # s12: 持久化任务
   .transcripts/             # s08: 压缩前的对话记录
   .task_outputs/            # s08: 大输出持久化
-  .sessions/                # s26: 会话持久化
+  runtime_data/              # 企业级 Phase 1: 会话、事件、审计的本地开发数据
   .mailboxes/               # s15: 队友邮箱
   .worktrees/               # s18: 隔离工作区
   skills/                   # s07: 技能定义
@@ -1535,32 +1396,41 @@ your-agent/
     code.py
     Dockerfile
     README.md
-  s22_permission_modes/
+  s22_enterprise_baseline/
     code.py
     README.md
-  s23_code_search/
+  s23_runtime_skeleton/
     code.py
     README.md
-  s24_web_tools/
+  s24_structured_events/
     code.py
     README.md
-  s25_multimedia/
+  s25_persistence/
     code.py
     README.md
-  s26_session/
+  s26_observability/
     code.py
     README.md
-  s27_project_instructions/
+  s27_security_tenant_policy/
     code.py
     README.md
-  s28_slash_commands/
+  s28_context_governance/
+    code.py
+    README.md
+  s29_skill_runtime/
+    code.py
+    README.md
+  s30_knowledge_rag/
+    code.py
+    README.md
+  s31_service_ui_eval/
     code.py
     README.md
 ```
 
 ## 关键设计原则
 
-1. **循环永远不变** — 从 s01 到 s20，`while stop_reason == "tool_use"` 的核心模式始终一致
+1. **循环核心不变，运行时边界升级** — s01-s21 证明 ReAct 工具循环，s22-s31 把它升级成有状态、有治理、有观测、有评测的企业级 Runtime
 2. **增量式构建** — 每章只新增一个机制，前一章代码完整保留
 3. **便宜先跑** — 压缩管线中 L1→L2→L3 零 API 调用，L4 才调 LLM
 4. **信任模型** — 不硬编码工作流，给工具让模型自己推理

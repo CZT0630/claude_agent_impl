@@ -176,6 +176,18 @@ claude_agent_impl/
 | s19 MCP Plugin | mcp/client.py | ⬜ | MCP 工具集成 |
 | s20 Comprehensive | main.py | ⬜ | 全机制整合 |
 | s21 Command Sandbox | tools/sandbox.py | ✅ | 跨平台命令沙箱 |
+| s22 Enterprise Baseline | tools/result.py, tests/, docs/threat-model.md | ✅ | 安全回归、最小 ToolResult、威胁模型 |
+
+## s22 Enterprise Baseline
+
+```powershell
+# 使用默认 tacn 环境运行 s22 安全与运行时基线测试
+D:\Language\anaconda3\envs\tacn\python.exe -m pytest tests/security tests/runtime
+```
+
+s22 保持现有 agent loop 的字符串返回兼容，同时新增最小 `ToolResult` 结构，供测试、审计和后续 Runtime Event 使用。本阶段锁住前台 bash、后台 bash、环境变量清理、危险命令拦截、输出截断、未知工具和 handler 异常这些 P0 风险。
+
+CI 门禁位于 `.github/workflows/s22-baseline.yml`，push / pull_request 时自动运行同一组基线测试。
 
 ## 学习路径
 

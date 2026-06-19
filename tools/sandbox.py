@@ -19,6 +19,8 @@ import platform
 import subprocess
 from pathlib import Path
 
+from tools.result import ToolResult
+
 
 # ─── 敏感环境变量 ──────────────────────────────────────────────
 # 执行命令时从环境中清除，防止泄露密钥
@@ -129,6 +131,24 @@ class Sandbox:
             self.backend = "none"
         else:
             self.backend = detect_backend()
+
+    def execute_result(self, command: str, timeout: int = 120) -> ToolResult:
+        """Execute a command and return the minimal structured s22 result."""
+        deny_reason = check_deny_list(command)
+        if deny_reason:
+            return ToolResult.failure(
+                "SANDBOX_DENY_PATTERN",
+                stderr=deny_reason,
+                metadata={"backend": self.backend, "command": command},
+            )
+
+        output = self.execute(command, timeout)
+        metadata = {"backend": self.backend, "command": command}
+        if output.startswith("Error: Timeout"):
+            return ToolResult.failure("SANDBOX_TIMEOUT", stderr=output, metadata=metadata)
+        if output.startswith("Error:"):
+            return ToolResult.failure("SANDBOX_EXEC_ERROR", stderr=output, metadata=metadata)
+        return ToolResult.success(stdout=output, metadata=metadata)
 
     def execute(self, command: str, timeout: int = 120) -> str:
         """
