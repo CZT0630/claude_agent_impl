@@ -15,8 +15,16 @@ Agent 核心循环 — 整个 agent 的心脏
 """
 
 import json
+import re
 from anthropic import Anthropic
+from agent.events import (
+    MODEL_FINISHED,
+    MODEL_STARTED,
+    TOOL_FINISHED,
+    TOOL_STARTED,
+)
 from tools.registry import ToolRegistry
+from tools.result import ToolResult
 from tools.background import BackgroundManager  # s13: 后台任务管理器
 from tools.cron import CronScheduler            # s14: 定时调度器
 from tools.teams import TeamManager             # s15: 队友管理器
@@ -102,6 +110,11 @@ class AgentLoop:
             return self.fallback_model
         return self.model
 
+    @staticmethod
+    def _artifact_refs_from_output(output: str) -> list[str]:
+        match = re.search(r"Full output saved to:\s*(.+)", output)
+        return [match.group(1).strip()] if match else []
+
     # ── 核心 LLM 调用（带恢复） ────────────────────────────────────
 
     def _call_llm(
@@ -137,6 +150,16 @@ class AgentLoop:
             }
 
             try:
+                if state:
+                    state.emit_event(
+                        MODEL_STARTED,
+                        payload={
+                            "model": model,
+                            "max_tokens": current_max,
+                            "message_count": len(messages),
+                            "tool_count": len(request["tools"]),
+                        },
+                    )
                 response = self.interceptors.intercept_model(
                     request,
                     lambda req: self.client.messages.create(
@@ -149,6 +172,14 @@ class AgentLoop:
                 )
                 if state:
                     state.record_model_call(request, response=response)
+                    state.emit_event(
+                        MODEL_FINISHED,
+                        payload={
+                            "model": model,
+                            "stop_reason": getattr(response, "stop_reason", None),
+                            "usage": getattr(response, "usage", None),
+                        },
+                    )
 
                 # 调用成功，重置 529 计数
                 self.recovery.on_success()
@@ -173,6 +204,13 @@ class AgentLoop:
             except Exception as e:
                 if state:
                     state.record_model_call(request, error=e)
+                    state.emit_event(
+                        MODEL_FINISHED,
+                        severity="error",
+                        message=str(e),
+                        payload={"model": model},
+                        error_code=type(e).__name__,
+                    )
                 error_type = classify_error(e)
 
                 # ── Path 2: prompt_too_long ──
@@ -299,14 +337,49 @@ class AgentLoop:
                     if block.name == "todo_write":
                         self.rounds_since_todo = 0
 
+                    if state:
+                        state.emit_event(
+                            TOOL_STARTED,
+                            payload={
+                                "name": block.name,
+                                "tool_use_id": block.id,
+                                "input": block.input,
+                            },
+                        )
+
                     # PreToolUse hook（权限检查在这里）
                     blocked = self.hooks.trigger("PreToolUse", block)
                     if blocked:
+                        blocked_result = ToolResult.failure(
+                            "TOOL_BLOCKED",
+                            stderr=str(blocked),
+                            metadata={"tool": block.name},
+                        )
+                        if state:
+                            state.record_tool_event(
+                                block.name,
+                                blocked_result.to_dict(),
+                                tool_use_id=block.id,
+                                ok=False,
+                                input=block.input,
+                            )
+                            state.emit_event(
+                                TOOL_FINISHED,
+                                severity="warning",
+                                message=str(blocked),
+                                payload={
+                                    "name": block.name,
+                                    "tool_use_id": block.id,
+                                    "ok": False,
+                                    "result": blocked_result.to_dict(),
+                                },
+                                error_code=blocked_result.error_code,
+                            )
                         print(f"\033[31m⛔ {blocked}\033[0m")
                         results.append({
                             "type": "tool_result",
                             "tool_use_id": block.id,
-                            "content": str(blocked),
+                            "content": blocked_result.to_text(),
                         })
                         continue
 
@@ -317,37 +390,67 @@ class AgentLoop:
                         "block": block,
                         "state": state,
                     }
+
+                    def execute_tool(req):
+                        result = self.tools.execute_result(req["name"], req["input"])
+                        req["_tool_result"] = result
+                        return result.to_text()
+
                     output = self.interceptors.intercept_tool(
                         tool_request,
-                        lambda req: self.tools.execute(req["name"], req["input"]),
+                        execute_tool,
                     )
+                    tool_result = tool_request.get("_tool_result")
+                    if not isinstance(tool_result, ToolResult):
+                        tool_result = ToolResult.from_output(
+                            output,
+                            metadata={"tool": block.name},
+                        )
+                    output_text = output.to_text() if isinstance(output, ToolResult) else str(output)
 
                     # s08: 大输出持久化
                     if self.compact:
-                        output = self.compact.truncate_output(str(output), block.id)
+                        output_text = self.compact.truncate_output(output_text, block.id)
+
+                    artifact_refs = list(tool_result.artifact_refs)
+                    artifact_refs.extend(self._artifact_refs_from_output(output_text))
 
                     if state:
                         state.record_tool_event(
                             block.name,
-                            output,
+                            tool_result.to_dict(),
                             tool_use_id=block.id,
-                            ok=not str(output).startswith("Error:"),
+                            ok=tool_result.ok,
                             input=block.input,
+                        )
+                        state.emit_event(
+                            TOOL_FINISHED,
+                            severity="info" if tool_result.ok else "error",
+                            message=tool_result.error_code or "",
+                            payload={
+                                "name": block.name,
+                                "tool_use_id": block.id,
+                                "ok": tool_result.ok,
+                                "result": tool_result.to_dict(),
+                                "display_content": output_text,
+                            },
+                            error_code=tool_result.error_code,
+                            artifact_refs=artifact_refs,
                         )
 
                     # PostToolUse hook
-                    self.hooks.trigger("PostToolUse", block, output)
+                    self.hooks.trigger("PostToolUse", block, output_text)
 
                     print(f"\033[33m> {block.name}\033[0m")
                     try:
-                        print(str(output)[:200])
+                        print(output_text[:200])
                     except UnicodeEncodeError:
-                        print(str(output)[:200].encode("utf-8", errors="replace").decode("utf-8"))
+                        print(output_text[:200].encode("utf-8", errors="replace").decode("utf-8"))
 
                     results.append({
                         "type": "tool_result",
                         "tool_use_id": block.id,
-                        "content": output,
+                        "content": output_text,
                     })
             messages.append({"role": "user", "content": results})
         return messages

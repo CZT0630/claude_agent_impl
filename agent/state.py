@@ -12,6 +12,8 @@ from pathlib import Path
 from typing import Any, Literal
 from uuid import uuid4
 
+from agent.events import EventSeverity
+
 
 LoopStatus = Literal["pending", "running", "completed", "failed", "cancelled"]
 
@@ -61,11 +63,12 @@ class LoopState:
     last_tool_name: str | None = None
     last_tool_result: Any = None
 
-    # Append-only runtime facts. s24/s25/s26 can turn these into events,
-    # persistence records, and trace spans.
+    # Append-only runtime facts. model_calls/tool_events keep compact summaries;
+    # events is the structured stream used by later persistence and tracing.
     assistant_output: str = ""
     model_calls: list[dict[str, Any]] = field(default_factory=list)
     tool_events: list[dict[str, Any]] = field(default_factory=list)
+    events: list[dict[str, Any]] = field(default_factory=list)
     token_usage: list[dict[str, Any]] = field(default_factory=list)
     context_sources: list[dict[str, Any]] = field(default_factory=list)
 
@@ -161,6 +164,37 @@ class LoopState:
                 "timestamp": time.time(),
             }
         )
+
+    def emit_event(
+        self,
+        event_type: str,
+        *,
+        phase: str | None = None,
+        severity: EventSeverity = "info",
+        message: str = "",
+        payload: dict[str, Any] | None = None,
+        error_code: str | None = None,
+        retryable: bool | None = None,
+        artifact_refs: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """Append a structured RuntimeEvent and return its dict form."""
+        from agent.events import RuntimeEvent
+
+        event = RuntimeEvent.from_state(
+            self,
+            event_type,
+            sequence=len(self.events) + 1,
+            phase=phase,
+            severity=severity,
+            message=message,
+            payload=payload,
+            error_code=error_code,
+            retryable=retryable,
+            artifact_refs=artifact_refs,
+        )
+        data = event.to_dict()
+        self.events.append(data)
+        return data
 
     def record_tool_event(
         self,

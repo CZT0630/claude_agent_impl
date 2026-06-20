@@ -60,6 +60,23 @@ def test_registry_accepts_handler_returning_tool_result():
     assert result.metadata == {"source": "test"}
 
 
+def test_tool_result_serializes_for_runtime_events():
+    result = ToolResult.failure(
+        "NOPE",
+        stderr="bad",
+        metadata={"tool": "example"},
+    )
+
+    assert result.to_dict() == {
+        "ok": False,
+        "stdout": "",
+        "stderr": "bad",
+        "error_code": "NOPE",
+        "metadata": {"tool": "example"},
+        "artifact_refs": [],
+    }
+
+
 def test_sandbox_structured_result_truncates_large_output(tmp_path):
     result = Sandbox(tmp_path, level="off").execute_result(
         _python_command("print('x' * 60000)"),

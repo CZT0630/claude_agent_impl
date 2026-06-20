@@ -80,3 +80,13 @@ class ToolResult:
         if self.error_code:
             return f"Error: {self.error_code}: {detail}"
         return f"Error: {detail}"
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "ok": self.ok,
+            "stdout": self.stdout,
+            "stderr": self.stderr,
+            "error_code": self.error_code,
+            "metadata": dict(self.metadata),
+            "artifact_refs": list(self.artifact_refs),
+        }

@@ -38,7 +38,11 @@ claude_agent_impl/
 ├── agent/                  # 核心
 │   ├── __init__.py
 │   ├── config.py           # 配置加载
-│   └── loop.py             # 核心 while 循环
+│   ├── loop.py             # 核心 while 循环
+│   ├── runtime.py          # s23: 单 turn 生命周期管线
+│   ├── state.py            # s23: LoopState 运行状态
+│   ├── interceptor.py      # s23: 模型/工具拦截链
+│   └── events.py           # s24: 结构化 Runtime Event
 │
 ├── tools/                  # 工具层
 │   ├── __init__.py
@@ -76,6 +80,10 @@ claude_agent_impl/
 │   ├── __init__.py
 │   ├── config.py               # 配置加载
 │   ├── loop.py                 # 核心 while 循环
+│   ├── runtime.py              # 企业级生命周期管线
+│   ├── state.py                # turn/run 状态与关联 ID
+│   ├── interceptor.py          # 横切拦截链
+│   ├── events.py               # 结构化事件流
 │   └── subagent.py             # s06: 子 Agent 派生
 │
 ├── tools/                      # 工具层
@@ -178,6 +186,7 @@ claude_agent_impl/
 | s21 Command Sandbox | tools/sandbox.py | ✅ | 跨平台命令沙箱 |
 | s22 Enterprise Baseline | tools/result.py, tests/, docs/threat-model.md | ✅ | 安全回归、最小 ToolResult、威胁模型 |
 | s23 Runtime Skeleton | agent/state.py, agent/interceptor.py, agent/runtime.py | ✅ | LoopState、Pipeline、Interceptor |
+| s24 Structured Events | agent/events.py, agent/state.py, agent/loop.py | ✅ | RuntimeEvent、事件流、artifact_refs |
 
 ## s22 Enterprise Baseline
 
@@ -207,6 +216,23 @@ s23 新增 `LoopState`、`AgentRuntime` 和 `InterceptorChain`。当前 CLI 已�
 4. `agent/interceptor.py`：提供模型/工具调用的横切扩展点。
 5. `agent/loop.py`：保留原有 ReAct 主循环，只在模型和工具调用处接入 state 与 interceptor。
 
+## s24 Structured Events
+
+```powershell
+# 运行结构化事件、Runtime 和安全基线测试
+D:\Language\anaconda3\envs\tacn\python.exe -m pytest tests/runtime tests/security
+```
+
+s24 新增 `RuntimeEvent`，并让 `AgentRuntime` 和 `AgentLoop` 在关键节点写入 `state.events`。事件覆盖 run 生命周期、phase 切换、模型调用、工具调用结果；工具层继续兼容字符串展示，同时通过 `ToolResult.to_dict()` 给事件流提供稳定结构。大输出和文件产物通过 `artifact_refs` 预留引用，不要求把完整内容塞回 prompt。
+
+阅读这部分代码时可以按这个顺序看：
+
+1. `tools/result.py`：工具执行事实的最小结构，区分 `stdout`、`stderr`、`ok`、`error_code` 和 `artifact_refs`。
+2. `agent/events.py`：Runtime Event 的统一 schema，负责带上 session、turn、run、trace、request 等关联 ID。
+3. `agent/state.py`：通过 `emit_event()` 把事件按 sequence 追加到 `state.events`。
+4. `agent/runtime.py`：发出 `run_started/run_finished/run_failed` 和 `phase_started/phase_finished`。
+5. `agent/loop.py`：发出 `model_started/model_finished` 与 `tool_started/tool_finished`。
+
 ## 学习路径
 
 ```
@@ -216,6 +242,7 @@ s23 新增 `LoopState`、`AgentRuntime` 和 `InterceptorChain`。当前 CLI 已�
 阶段四: s12 Task System → s13 Background Tasks → s14 Cron Scheduler
 阶段五: s15 Agent Teams → s16 Team Protocols → s17 Autonomous Agents → s18 Worktree Isolation
 阶段六: s19 MCP Plugin → s20 Comprehensive Agent
+企业级升级: s21 Command Sandbox → s22 Enterprise Baseline → s23 Runtime Skeleton → s24 Structured Events
 ```
 
 ## 运行环境
