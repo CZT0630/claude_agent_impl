@@ -47,7 +47,15 @@ from agent.recovery import (
 
 
 class MessageCreateClient(Protocol):
-    def create(self, **kwargs: Any) -> Any: ...
+    def create(
+        self,
+        *,
+        model: Any,
+        system: Any,
+        messages: Any,
+        tools: Any,
+        max_tokens: int,
+    ) -> Any: ...
 
 
 class LLMClient(Protocol):
