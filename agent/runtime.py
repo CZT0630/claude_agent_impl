@@ -14,6 +14,7 @@ from agent.events import (
     RUN_FINISHED,
     RUN_STARTED,
 )
+from agent.event_store import RuntimeEventStore
 from agent.interceptor import InterceptorChain
 from agent.state import LoopState
 
@@ -33,10 +34,12 @@ class AgentRuntime:
         loop,
         *,
         interceptors: InterceptorChain | None = None,
+        event_store: RuntimeEventStore | None = None,
     ):
         self.loop = loop
         self.interceptors = interceptors or getattr(loop, "interceptors", InterceptorChain())
         self.loop.interceptors = self.interceptors
+        self.event_store = event_store
 
     def execute(self, state: LoopState) -> list:
         """Run one turn and leave success/failure facts on LoopState."""
@@ -75,6 +78,7 @@ class AgentRuntime:
                 payload={"status": state.status},
                 error_code=type(exc).__name__,
             )
+            self._persist(state)
             raise
 
     def _mark_phase(self, state: LoopState, name: str) -> None:
@@ -129,4 +133,9 @@ class AgentRuntime:
                 "tool_call_count": len(state.tool_events),
             },
         )
+        self._persist(state)
         return state.messages
+
+    def _persist(self, state: LoopState) -> None:
+        if self.event_store is not None:
+            self.event_store.save_state(state)

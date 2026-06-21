@@ -1,6 +1,7 @@
 """Public imports for the agent runtime package."""
 
 from .config import Config
+from .event_store import JsonlEventStore, RuntimeEventStore
 from .events import RuntimeEvent
 from .loop import AgentLoop
 from .recovery import RecoveryState
@@ -13,9 +14,11 @@ __all__ = [
     "AgentLoop",
     "Config",
     "InterceptorChain",
+    "JsonlEventStore",
     "LoopState",
     "ModelInterceptor",
     "RecoveryState",
+    "RuntimeEventStore",
     "RuntimeEvent",
     "ToolInterceptor",
 ]

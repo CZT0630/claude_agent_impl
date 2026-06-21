@@ -42,7 +42,8 @@ claude_agent_impl/
 │   ├── runtime.py          # s23: 单 turn 生命周期管线
 │   ├── state.py            # s23: LoopState 运行状态
 │   ├── interceptor.py      # s23: 模型/工具拦截链
-│   └── events.py           # s24: 结构化 Runtime Event
+│   ├── events.py           # s24: 结构化 Runtime Event
+│   └── event_store.py      # s25: 本地事件与 run 持久化
 │
 ├── tools/                  # 工具层
 │   ├── __init__.py
@@ -84,6 +85,7 @@ claude_agent_impl/
 │   ├── state.py                # turn/run 状态与关联 ID
 │   ├── interceptor.py          # 横切拦截链
 │   ├── events.py               # 结构化事件流
+│   ├── event_store.py          # Runtime Event 仓储
 │   └── subagent.py             # s06: 子 Agent 派生
 │
 ├── tools/                      # 工具层
@@ -156,7 +158,10 @@ claude_agent_impl/
     ├── mailboxes/              # s15: 队友邮箱
     ├── worktrees/              # s18: 隔离工作区
     ├── transcripts/            # s08: 压缩前对话记录
-    └── tool-results/           # s08: 大输出持久化
+    ├── tool-results/           # s08: 大输出持久化
+    └── runtime/                # s25: Runtime 事件和 run 记录
+        ├── events/runtime-events.jsonl
+        └── runs/{run_id}.json
 ```
 
 ## 实现进度
@@ -187,6 +192,7 @@ claude_agent_impl/
 | s22 Enterprise Baseline | tools/result.py, tests/, docs/threat-model.md | ✅ | 安全回归、最小 ToolResult、威胁模型 |
 | s23 Runtime Skeleton | agent/state.py, agent/interceptor.py, agent/runtime.py | ✅ | LoopState、Pipeline、Interceptor |
 | s24 Structured Events | agent/events.py, agent/state.py, agent/loop.py | ✅ | RuntimeEvent、事件流、artifact_refs |
+| s25 Persistence | agent/event_store.py, agent/runtime.py | ✅ | JSONL 事件仓储、run 摘要持久化 |
 
 ## s22 Enterprise Baseline
 
@@ -233,6 +239,22 @@ s24 新增 `RuntimeEvent`，并让 `AgentRuntime` 和 `AgentLoop` 在关键节�
 4. `agent/runtime.py`：发出 `run_started/run_finished/run_failed` 和 `phase_started/phase_finished`。
 5. `agent/loop.py`：发出 `model_started/model_finished` 与 `tool_started/tool_finished`。
 
+## s25 Persistence
+
+```powershell
+# 运行持久化、Runtime 和安全基线测试
+D:\Language\anaconda3\envs\tacn\python.exe -m pytest tests/runtime tests/security
+```
+
+s25 新增 `JsonlEventStore`，把 s24 的内存事件流落到 `data/runtime/events/runtime-events.jsonl`，并把每次 run 的摘要写入 `data/runtime/runs/{run_id}.json`。当前实现仍然是本地文件仓储，便于学习和测试；接口通过 `RuntimeEventStore` 收窄，后续可以替换为 SQLite、PostgreSQL 或 outbox 实现。
+
+阅读这部分代码时可以按这个顺序看：
+
+1. `agent/event_store.py`：定义 `RuntimeEventStore` 协议和 `JsonlEventStore` 文件仓储。
+2. `agent/runtime.py`：在成功和失败路径统一调用 `_persist(state)`。
+3. `main.py`：CLI 默认使用 `JsonlEventStore.for_workdir(config.workdir)`。
+4. `tests/runtime/test_event_store.py`：验证事件写入、过滤、去重、成功 run 和失败 run 持久化。
+
 ## 学习路径
 
 ```
@@ -242,7 +264,7 @@ s24 新增 `RuntimeEvent`，并让 `AgentRuntime` 和 `AgentLoop` 在关键节�
 阶段四: s12 Task System → s13 Background Tasks → s14 Cron Scheduler
 阶段五: s15 Agent Teams → s16 Team Protocols → s17 Autonomous Agents → s18 Worktree Isolation
 阶段六: s19 MCP Plugin → s20 Comprehensive Agent
-企业级升级: s21 Command Sandbox → s22 Enterprise Baseline → s23 Runtime Skeleton → s24 Structured Events
+企业级升级: s21 Command Sandbox → s22 Enterprise Baseline → s23 Runtime Skeleton → s24 Structured Events → s25 Persistence
 ```
 
 ## 运行环境

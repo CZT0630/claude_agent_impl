@@ -12,6 +12,7 @@ sys.stderr.reconfigure(encoding="utf-8")  # type: ignore[attr-defined]
 from anthropic import Anthropic
 
 from agent.config import Config
+from agent.event_store import JsonlEventStore
 from agent.loop import AgentLoop
 from agent.runtime import AgentRuntime
 from agent.state import LoopState
@@ -452,7 +453,10 @@ def _print_last_assistant_message(history: list) -> None:
 def main():
     config = Config.from_env()
     agent = build_agent(config)
-    runtime = AgentRuntime(agent)
+    runtime = AgentRuntime(
+        agent,
+        event_store=JsonlEventStore.for_workdir(config.workdir),
+    )
     _start_background_services(agent)
     _print_banner(config)
 
