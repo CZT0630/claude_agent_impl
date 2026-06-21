@@ -16,7 +16,8 @@ Agent 核心循环 — 整个 agent 的心脏
 
 import json
 import re
-from anthropic import Anthropic
+from typing import Any, Protocol
+
 from agent.events import (
     MODEL_FINISHED,
     MODEL_STARTED,
@@ -45,10 +46,21 @@ from agent.recovery import (
 )
 
 
+class MessageCreateClient(Protocol):
+    def create(self, **kwargs: Any) -> Any: ...
+
+
+class LLMClient(Protocol):
+    """Small protocol for Anthropic-compatible clients used by AgentLoop."""
+
+    @property
+    def messages(self) -> MessageCreateClient: ...
+
+
 class AgentLoop:
     def __init__(
         self,
-        client: Anthropic,
+        client: LLMClient,
         model: str,
         system_prompt: str | PromptAssembler,
         tool_registry: ToolRegistry,
