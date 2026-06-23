@@ -1,0 +1,519 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Claude Agent</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            surface: { DEFAULT: '#212121', light: '#2f2f2f', lighter: '#383838', border: '#424242' },
+            sidebar: '#171717',
+            bubble: '#2f2f2f',
+          }
+        }
+      }
+    }
+  </script>
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11/styles/github-dark.min.css">
+  <script src="https://cdn.jsdelivr.net/npm/highlight.js@11/highlight.min.js"></script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap');
+    * { font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
+    ::-webkit-scrollbar { width: 5px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 10px; }
+    ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.2); }
+
+    @keyframes fadeUp {
+      from { opacity: 0; transform: translateY(8px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    .msg-enter { animation: fadeUp 0.3s ease-out; }
+
+    @keyframes pulse-dot {
+      0%, 80%, 100% { opacity: 0.2; transform: scale(0.8); }
+      40% { opacity: 1; transform: scale(1); }
+    }
+    .typing-dot {
+      display: inline-block; width: 7px; height: 7px;
+      border-radius: 50%; background: #8e8ea0;
+      animation: pulse-dot 1.4s infinite both;
+    }
+    .typing-dot:nth-child(2) { animation-delay: 0.2s; }
+    .typing-dot:nth-child(3) { animation-delay: 0.4s; }
+
+    /* Markdown */
+    .md-content { line-height: 1.7; }
+    .md-content h1, .md-content h2, .md-content h3 {
+      font-weight: 600; margin-top: 1em; margin-bottom: 0.5em;
+      color: #ececf1;
+    }
+    .md-content h1 { font-size: 1.3em; }
+    .md-content h2 { font-size: 1.15em; }
+    .md-content h3 { font-size: 1.05em; }
+    .md-content p { margin-bottom: 0.6em; }
+    .md-content ul, .md-content ol { padding-left: 1.5em; margin-bottom: 0.6em; }
+    .md-content li { margin-bottom: 0.3em; }
+    .md-content li::marker { color: #8e8ea0; }
+    .md-content table {
+      border-collapse: collapse; margin: 0.75em 0; width: 100%; font-size: 0.9em;
+      border-radius: 8px; overflow: hidden;
+    }
+    .md-content th, .md-content td {
+      border: 1px solid #424242; padding: 0.5em 0.75em; text-align: left;
+    }
+    .md-content th { background: #2a2a2a; font-weight: 600; color: #ececf1; }
+    .md-content tr:nth-child(even) { background: rgba(255,255,255,0.02); }
+    .md-content code {
+      background: rgba(255,255,255,0.08); padding: 0.15em 0.45em; border-radius: 5px;
+      font-size: 0.88em; font-family: 'Cascadia Code', 'Fira Code', 'JetBrains Mono', monospace;
+      color: #e4e4e7;
+    }
+    .md-content pre {
+      background: #1a1a1a; border-radius: 10px; padding: 1em 1.2em;
+      overflow-x: auto; margin: 0.75em 0; border: 1px solid #333;
+    }
+    .md-content pre code { background: transparent; padding: 0; font-size: 0.85em; }
+    .md-content hr { border: none; border-top: 1px solid #424242; margin: 1em 0; }
+    .md-content blockquote {
+      border-left: 3px solid #7c3aed; padding-left: 1em;
+      color: #a1a1aa; margin: 0.75em 0; font-style: italic;
+    }
+    .md-content a { color: #818cf8; text-decoration: none; }
+    .md-content a:hover { text-decoration: underline; }
+    .md-content strong { color: #f4f4f5; font-weight: 600; }
+    .md-content em { color: #d4d4d8; }
+    .md-content p:last-child, .md-content ul:last-child, .md-content ol:last-child,
+    .md-content table:last-child, .md-content pre:last-child { margin-bottom: 0; }
+
+    /* 侧栏 */
+    .session-item { transition: all 0.15s ease; }
+    .session-item:hover { background: rgba(255,255,255,0.06); }
+    .session-item.active { background: rgba(255,255,255,0.1); }
+
+    /* 输入框聚焦光环 */
+    .input-glow:focus-within {
+      box-shadow: 0 0 0 1px rgba(99,102,241,0.4), 0 0 12px rgba(99,102,241,0.1);
+    }
+
+    /* 事件标签 */
+    .ev-tag {
+      display: inline-block; padding: 1px 6px; border-radius: 4px;
+      font-size: 0.7em; font-weight: 500; letter-spacing: 0.02em;
+    }
+
+    /* 右侧面板 tab */
+    .r-tab {
+      position: relative; padding-bottom: 10px;
+      transition: color 0.2s;
+    }
+    .r-tab::after {
+      content: ''; position: absolute; bottom: 0; left: 50%; width: 0;
+      height: 2px; background: #818cf8; border-radius: 1px;
+      transition: all 0.2s; transform: translateX(-50%);
+    }
+    .r-tab.active::after { width: 60%; }
+    .r-tab.active { color: #e4e4e7; }
+  </style>
+</head>
+
+<body class="bg-sidebar text-neutral-200 h-screen flex" x-data="dashboard()">
+
+  <!-- ① 左侧栏 -->
+  <aside class="w-[260px] shrink-0 flex flex-col bg-sidebar border-r border-white/5">
+
+    <!-- Logo -->
+    <div class="px-4 pt-4 pb-2">
+      <div class="flex items-center gap-2.5">
+        <div class="w-8 h-8 rounded-lg bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center">
+          <svg class="w-4.5 h-4.5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                  d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/>
+          </svg>
+        </div>
+        <span class="text-[15px] font-semibold text-white/90 tracking-tight">Claude Agent</span>
+      </div>
+    </div>
+
+    <!-- 新建按钮 -->
+    <div class="px-3 py-2">
+      <button @click="newSession()"
+        class="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-sm font-medium
+               border border-white/10 text-white/80 hover:text-white hover:bg-white/5
+               transition-all duration-200">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
+        </svg>
+        新建对话
+      </button>
+    </div>
+
+    <!-- 分割线 -->
+    <div class="px-4 py-1">
+      <div class="text-[11px] font-medium text-white/30 uppercase tracking-wider">对话历史</div>
+    </div>
+
+    <!-- 会话列表 -->
+    <div class="flex-1 overflow-y-auto px-2 pb-3 space-y-0.5">
+      <template x-for="(s, i) in sessions" :key="s.session_id">
+        <div @click="switchSession(s.session_id)"
+             :class="s.session_id === sessionId ? 'active' : ''"
+             class="session-item group cursor-pointer px-3 py-2.5 rounded-xl relative">
+          <div class="flex items-center gap-2.5">
+            <svg class="w-4 h-4 text-white/20 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"
+                    d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/>
+            </svg>
+            <span class="text-[13px] text-white/70 truncate flex-1" x-text="s.title || '新对话'"
+                  :class="s.session_id === sessionId ? 'text-white/90' : ''"></span>
+          </div>
+          <div class="mt-1 pl-[26px] text-[11px] text-white/25 truncate" x-text="s.preview || ''"></div>
+        </div>
+      </template>
+      <div x-show="sessions.length === 0" class="text-white/20 text-xs text-center py-10">
+        还没有对话
+      </div>
+    </div>
+
+    <!-- 底部指标迷你条 -->
+    <div class="px-4 py-3 border-t border-white/5">
+      <div class="flex items-center justify-between text-[11px] text-white/25">
+        <span>Tokens <span class="text-white/40" x-text="metrics.input_tokens + '/' + metrics.output_tokens"></span></span>
+        <span>Tools <span class="text-white/40" x-text="metrics.tool_finished_count"></span></span>
+      </div>
+    </div>
+  </aside>
+
+  <!-- ② 中间：Chat -->
+  <div class="flex-1 flex flex-col min-w-0 bg-surface">
+
+    <!-- 顶栏 -->
+    <header class="shrink-0 h-12 flex items-center justify-between px-5 border-b border-white/5">
+      <div class="flex items-center gap-2">
+        <div class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></div>
+        <span class="text-sm text-white/50" x-text="sessionId ? 'Session ' + sessionId.slice(8, 16) : '新对话'"></span>
+      </div>
+      <div class="flex items-center gap-1">
+        <button @click="rightPanelOpen = !rightPanelOpen"
+                class="p-1.5 rounded-lg text-white/30 hover:text-white/60 hover:bg-white/5 transition-all"
+                :title="rightPanelOpen ? '收起面板' : '展开面板'">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"
+                  d="M9 17V7m0 10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2a2 2 0 012 2m0 10a2 2 0 002 2h2a2 2 0 002-2M9 7a2 2 0 012-2h2a2 2 0 012 2m0 10V7"/>
+          </svg>
+        </button>
+      </div>
+    </header>
+
+    <!-- 消息区 -->
+    <div class="flex-1 overflow-y-auto" x-ref="chatList"
+         x-effect="$nextTick(() => $refs.chatList.scrollTop = $refs.chatList.scrollHeight)">
+
+      <!-- 欢迎页 -->
+      <div x-show="messages.length === 0 && !loading" class="flex flex-col items-center justify-center h-full">
+        <div class="w-16 h-16 rounded-2xl bg-gradient-to-br from-indigo-500/20 to-purple-500/20 border border-white/5
+                    flex items-center justify-center mb-5">
+          <svg class="w-8 h-8 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"
+                  d="M8 10h.01M12 10h.01M16 10h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/>
+          </svg>
+        </div>
+        <p class="text-lg font-medium text-white/70">有什么可以帮你的？</p>
+        <p class="text-sm text-white/25 mt-1.5">发送一条消息开始对话</p>
+      </div>
+
+      <!-- 消息列表 -->
+      <div class="max-w-[820px] mx-auto px-5 py-6 space-y-5">
+        <template x-for="(msg, i) in messages" :key="i">
+          <div class="msg-enter flex gap-3.5" :class="msg.role === 'user' ? 'flex-row-reverse' : ''">
+            <!-- 头像 -->
+            <div class="shrink-0 mt-0.5">
+              <template x-if="msg.role === 'user'">
+                <div class="w-7 h-7 rounded-full bg-gradient-to-br from-blue-500 to-cyan-400 flex items-center justify-center">
+                  <svg class="w-3.5 h-3.5 text-white" fill="currentColor" viewBox="0 0 24 24">
+                    <path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/>
+                  </svg>
+                </div>
+              </template>
+              <template x-if="msg.role === 'assistant'">
+                <div class="w-7 h-7 rounded-full bg-gradient-to-br from-indigo-500 to-purple-500 flex items-center justify-center">
+                  <svg class="w-3.5 h-3.5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                          d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/>
+                  </svg>
+                </div>
+              </template>
+            </div>
+            <!-- 内容 -->
+            <div class="flex-1 min-w-0" :class="msg.role === 'user' ? 'flex justify-end' : ''">
+              <div :class="msg.role === 'user'
+                    ? 'inline-block bg-[#303030] text-white/90 rounded-2xl rounded-tr-md px-4 py-2.5 max-w-[85%]'
+                    : 'text-white/80'">
+                <template x-if="msg.role === 'user'">
+                  <pre class="whitespace-pre-wrap font-sans text-[14px] leading-relaxed" x-text="msg.text"></pre>
+                </template>
+                <template x-if="msg.role === 'assistant'">
+                  <div class="text-[14px] md-content" x-html="renderMd(msg.text)"></div>
+                </template>
+              </div>
+            </div>
+          </div>
+        </template>
+
+        <!-- Typing -->
+        <div x-show="loading" class="msg-enter flex gap-3.5">
+          <div class="w-7 h-7 rounded-full bg-gradient-to-br from-indigo-500 to-purple-500 flex items-center justify-center shrink-0">
+            <svg class="w-3.5 h-3.5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                    d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/>
+            </svg>
+          </div>
+          <div class="flex items-center gap-1.5 py-2">
+            <span class="typing-dot"></span>
+            <span class="typing-dot"></span>
+            <span class="typing-dot"></span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 输入区 -->
+    <div class="shrink-0 border-t border-white/5 bg-surface px-5 py-4">
+      <div class="max-w-[820px] mx-auto">
+        <div class="input-glow flex items-end gap-2 bg-surface-light border border-white/8 rounded-2xl px-4 py-2.5
+                    transition-all duration-200">
+          <textarea
+            x-model="input" x-ref="inputBox"
+            @keydown.enter.prevent="if (!$event.shiftKey) send()"
+            @input="autoResize($event.target)"
+            rows="1" placeholder="输入消息…"
+            class="flex-1 bg-transparent text-[14px] text-white/90 placeholder-white/25 resize-none
+                   outline-none leading-relaxed max-h-[160px]"
+          ></textarea>
+          <button @click="send()" :disabled="loading || !input.trim()"
+            class="shrink-0 w-8 h-8 rounded-xl flex items-center justify-center transition-all duration-200 mb-0.5"
+            :class="(!loading && input.trim())
+              ? 'bg-indigo-500 hover:bg-indigo-400 text-white shadow-lg shadow-indigo-500/20'
+              : 'bg-white/5 text-white/15 cursor-not-allowed'">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M12 5l7 7-7 7"/>
+            </svg>
+          </button>
+        </div>
+        <div class="text-center mt-2 text-[11px] text-white/15">
+          Enter 发送 · Shift+Enter 换行
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ③ 右侧面板 -->
+  <aside x-show="rightPanelOpen" x-transition:enter="transition ease-out duration-200"
+         x-transition:enter-start="translate-x-4 opacity-0" x-transition:enter-end="translate-x-0 opacity-100"
+         class="w-[360px] shrink-0 flex flex-col bg-sidebar border-l border-white/5">
+
+    <!-- Tabs -->
+    <div class="flex items-center gap-1 px-4 h-12 border-b border-white/5">
+      <button @click="rightTab = 'events'"
+              :class="rightTab === 'events' ? 'active text-white/90' : 'text-white/30 hover:text-white/50'"
+              class="r-tab text-[12px] font-medium px-2.5 bg-transparent border-0 cursor-pointer">Events</button>
+      <button @click="rightTab = 'traces'"
+              :class="rightTab === 'traces' ? 'active text-white/90' : 'text-white/30 hover:text-white/50'"
+              class="r-tab text-[12px] font-medium px-2.5 bg-transparent border-0 cursor-pointer">Traces</button>
+      <button @click="rightTab = 'metrics'"
+              :class="rightTab === 'metrics' ? 'active text-white/90' : 'text-white/30 hover:text-white/50'"
+              class="r-tab text-[12px] font-medium px-2.5 bg-transparent border-0 cursor-pointer">Metrics</button>
+    </div>
+
+    <!-- Events -->
+    <div x-show="rightTab === 'events'" class="flex-1 overflow-y-auto p-3 space-y-px"
+         x-ref="eventList" x-effect="if(rightTab==='events') $nextTick(() => $refs.eventList.scrollTop = $refs.eventList.scrollHeight)">
+      <template x-for="(ev, i) in events.slice(-200)" :key="i">
+        <div class="msg-enter flex items-start gap-2 py-1.5 px-2 rounded-lg hover:bg-white/[0.03] text-[12px]">
+          <span class="text-white/20 shrink-0 w-[46px] text-right tabular-nums"
+                x-text="new Date(ev.timestamp * 1000).toLocaleTimeString('zh-CN', {hour12:false, hour:'2-digit', minute:'2-digit', second:'2-digit'})"></span>
+          <span class="ev-tag shrink-0" :class="eventTagColor(ev.type)" x-text="ev.type"></span>
+          <span class="text-white/40 truncate" x-text="eventSummary(ev)"></span>
+        </div>
+      </template>
+      <div x-show="events.length === 0" class="text-white/15 text-xs text-center py-16">
+        等待事件…
+      </div>
+    </div>
+
+    <!-- Traces -->
+    <div x-show="rightTab === 'traces'" class="flex-1 overflow-y-auto p-3 space-y-1.5">
+      <template x-for="(span, i) in traces" :key="i">
+        <div class="msg-enter bg-white/[0.02] border border-white/5 rounded-xl px-3 py-2">
+          <div class="flex items-center gap-2">
+            <span class="w-1.5 h-1.5 rounded-full shrink-0"
+                  :class="span.status === 'ok' ? 'bg-emerald-400' : span.status === 'error' ? 'bg-red-400' : 'bg-white/20'"></span>
+            <span class="text-[13px] text-white/80 font-medium" x-text="span.name"></span>
+            <span class="text-white/20 text-[11px] ml-auto tabular-nums"
+                  x-text="span.duration ? span.duration.toFixed(2) + 's' : '—'"></span>
+          </div>
+          <div class="text-[11px] text-white/15 mt-1 pl-[22px]"
+               x-text="'run:' + (span.run_id || '').slice(0, 10) + '…  ' + (span.phase || '')"></div>
+        </div>
+      </template>
+      <div x-show="traces.length === 0" class="text-white/15 text-xs text-center py-16">暂无 trace</div>
+    </div>
+
+    <!-- Metrics -->
+    <div x-show="rightTab === 'metrics'" class="flex-1 overflow-y-auto p-4">
+      <div class="grid grid-cols-2 gap-2.5">
+        <template x-for="(item, i) in metricsCards" :key="i">
+          <div class="bg-white/[0.03] border border-white/5 rounded-xl p-3.5">
+            <div class="text-[11px] text-white/25 mb-1.5" x-text="item.label"></div>
+            <div class="text-[22px] font-semibold tabular-nums" :class="item.color" x-text="item.value"></div>
+          </div>
+        </template>
+      </div>
+    </div>
+  </aside>
+
+  <script>
+  function dashboard() {
+    return {
+      sessionId: '', messages: [], sessions: [], events: [], traces: [],
+      metrics: {
+        event_count:0, run_started_count:0, run_finished_count:0, run_failed_count:0,
+        model_started_count:0, model_finished_count:0, model_failed_count:0,
+        tool_started_count:0, tool_finished_count:0, tool_failed_count:0,
+        input_tokens:0, output_tokens:0,
+      },
+      input: '', loading: false, rightTab: 'events', rightPanelOpen: true,
+
+      get metricsCards() {
+        const m = this.metrics;
+        return [
+          { label: '总事件',   value: m.event_count,          color: 'text-white/90' },
+          { label: '成功/失败', value: m.run_finished_count + ' / ' + m.run_failed_count, color: 'text-emerald-400' },
+          { label: '模型调用', value: m.model_finished_count, color: 'text-sky-400' },
+          { label: '工具调用', value: m.tool_finished_count,  color: 'text-amber-400' },
+          { label: 'Input',    value: m.input_tokens.toLocaleString(), color: 'text-cyan-400' },
+          { label: 'Output',   value: m.output_tokens.toLocaleString(), color: 'text-violet-400' },
+        ];
+      },
+
+      init() {
+        this.connectSSE(); this.refreshMetrics(); this.refreshSessions();
+        setInterval(() => this.refreshMetrics(), 5000);
+        setInterval(() => this.refreshSessions(), 10000);
+      },
+
+      connectSSE() {
+        const es = new EventSource('/api/events/stream');
+        es.onmessage = (e) => {
+          try {
+            this.events.push(JSON.parse(e.data));
+            if (this.events.length > 500) this.events.splice(0, this.events.length - 500);
+          } catch {}
+        };
+      },
+
+      newSession() {
+        this.sessionId = ''; this.messages = [];
+        this.$nextTick(() => this.$refs.inputBox?.focus());
+      },
+
+      async switchSession(sid) {
+        if (sid === this.sessionId) return;
+        this.sessionId = sid;
+        try {
+          const data = await (await fetch('/api/sessions/' + sid + '/messages')).json();
+          this.messages = (data.messages || []).map(m => ({
+            role: m.role, text: this.extractText(m.content),
+          }));
+        } catch { this.messages = []; }
+      },
+
+      extractText(c) {
+        if (typeof c === 'string') return c;
+        if (Array.isArray(c)) return c.filter(b => b.type === 'text' || b.text).map(b => b.text || '').join('\n');
+        return '';
+      },
+
+      async refreshSessions() {
+        try { this.sessions = await (await fetch('/api/sessions')).json(); } catch {}
+      },
+
+      async send() {
+        const msg = this.input.trim();
+        if (!msg || this.loading) return;
+        this.input = '';
+        this.messages.push({ role: 'user', text: msg });
+        this.loading = true;
+        try {
+          const res = await fetch('/api/chat', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ message: msg, session_id: this.sessionId || undefined }),
+          });
+          const data = await res.json();
+          if (data.session_id) this.sessionId = data.session_id;
+          if (data.reply) this.messages.push({ role: 'assistant', text: data.reply });
+          else if (data.error) this.messages.push({ role: 'assistant', text: 'Error: ' + data.error });
+        } catch (err) {
+          this.messages.push({ role: 'assistant', text: 'Network error: ' + err.message });
+        } finally {
+          this.loading = false;
+          this.refreshMetrics(); this.refreshTraces(); this.refreshSessions();
+        }
+      },
+
+      async refreshMetrics() { try { this.metrics = await (await fetch('/api/metrics')).json(); } catch {} },
+      async refreshTraces()  { try { this.traces  = await (await fetch('/api/traces')).json();  } catch {} },
+
+      autoResize(el) {
+        el.style.height = 'auto';
+        el.style.height = Math.min(el.scrollHeight, 160) + 'px';
+      },
+
+      renderMd(text) {
+        if (!text) return '';
+        try {
+          return marked.parse(text, {
+            breaks: true, gfm: true,
+            highlight: (code, lang) => {
+              if (lang && hljs.getLanguage(lang)) return hljs.highlight(code, { language: lang }).value;
+              return hljs.highlightAuto(code).value;
+            },
+          });
+        } catch { return text; }
+      },
+
+      eventTagColor(t) {
+        if (t?.startsWith('run_'))   return 'bg-emerald-500/15 text-emerald-400';
+        if (t?.startsWith('phase_')) return 'bg-amber-500/15 text-amber-400';
+        if (t?.startsWith('model_')) return 'bg-sky-500/15 text-sky-400';
+        if (t?.startsWith('tool_'))  return 'bg-violet-500/15 text-violet-400';
+        return 'bg-white/5 text-white/30';
+      },
+
+      eventSummary(ev) {
+        const p = ev.payload || {};
+        switch (ev.type) {
+          case 'run_started':   return `model=${p.model}`;
+          case 'run_finished':  return `status=${p.status} · ${p.model_call_count} models · ${p.tool_call_count} tools`;
+          case 'run_failed':    return ev.message || ev.error_code;
+          case 'phase_started': return ev.phase;
+          case 'phase_finished':return `${ev.phase} · ${(p.duration||0).toFixed(2)}s`;
+          case 'model_started': return `${p.model} · ${p.message_count} msgs`;
+          case 'model_finished':return `${p.model} · ${p.stop_reason} · ${p.usage ? 'in:'+p.usage.input_tokens+' out:'+p.usage.output_tokens : ''}`;
+          case 'tool_started':  return p.name;
+          case 'tool_finished': return `${p.name} · ${p.ok ? 'ok' : 'fail'}`;
+          default:              return ev.message || JSON.stringify(p).slice(0, 80);
+        }
+      },
+    };
+  }
+  </script>
+
+</body>
+</html>

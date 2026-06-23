@@ -12,8 +12,30 @@ pip install -r requirements.txt
 cp .env.example .env
 # 编辑 .env 填入你的 ANTHROPIC_API_KEY
 
-# 3. 运行
+# 3. 运行 CLI
 python main.py
+
+# 或运行 Web Dashboard
+python -m web.server --port 8000
+# 浏览器打开 http://127.0.0.1:8000
+```
+
+## Web Dashboard
+
+基于 s26 EventBus 的浏览器前端，提供 Chat + Event Stream + Metrics + Traces 四个面板。
+
+```powershell
+# 启动
+python -m web.server               # 默认 127.0.0.1:8000
+python -m web.server --port 3000   # 自定义端口
+```
+
+架构：
+```
+Browser  ←── SSE ──→  FastAPI  ←── InProcessEventBus
+         ←── REST ─→          ←── RuntimeMetrics
+                                ←── RuntimeTraceRecorder
+                                ←── JsonlEventStore
 ```
 
 ## 当前项目结构
@@ -45,6 +67,12 @@ claude_agent_impl/
 │   ├── events.py           # s24: 结构化 Runtime Event
 │   ├── event_store.py      # s25: 本地事件与 run 持久化
 │   └── event_bus.py        # s26: 本进程事件分发与观测订阅者
+│
+├── web/                    # Web Dashboard (FastAPI + 前端)
+│   ├── __init__.py
+│   ├── server.py           # HTTP 桥接层：AgentRuntime → REST/SSE
+│   └── static/
+│       └── index.html      # 单文件前端：Chat + Event Stream + Metrics
 │
 ├── tools/                  # 工具层
 │   ├── __init__.py
