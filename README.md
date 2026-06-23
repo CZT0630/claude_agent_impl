@@ -43,7 +43,8 @@ claude_agent_impl/
 │   ├── state.py            # s23: LoopState 运行状态
 │   ├── interceptor.py      # s23: 模型/工具拦截链
 │   ├── events.py           # s24: 结构化 Runtime Event
-│   └── event_store.py      # s25: 本地事件与 run 持久化
+│   ├── event_store.py      # s25: 本地事件与 run 持久化
+│   └── event_bus.py        # s26: 本进程事件分发与观测订阅者
 │
 ├── tools/                  # 工具层
 │   ├── __init__.py
@@ -86,6 +87,7 @@ claude_agent_impl/
 │   ├── interceptor.py          # 横切拦截链
 │   ├── events.py               # 结构化事件流
 │   ├── event_store.py          # Runtime Event 仓储
+│   ├── event_bus.py            # EventPublisher / EventBus / Metrics / Trace
 │   └── subagent.py             # s06: 子 Agent 派生
 │
 ├── tools/                      # 工具层
@@ -193,6 +195,7 @@ claude_agent_impl/
 | s23 Runtime Skeleton | agent/state.py, agent/interceptor.py, agent/runtime.py | ✅ | LoopState、Pipeline、Interceptor |
 | s24 Structured Events | agent/events.py, agent/state.py, agent/loop.py | ✅ | RuntimeEvent、事件流、artifact_refs |
 | s25 Persistence | agent/event_store.py, agent/runtime.py | ✅ | JSONL 事件仓储、run 摘要持久化 |
+| s26 Observability | agent/event_bus.py, agent/state.py, agent/runtime.py | ✅ | EventPublisher、InProcessEventBus、Metrics、Trace |
 
 ## s22 Enterprise Baseline
 
@@ -255,6 +258,23 @@ s25 新增 `JsonlEventStore`，把 s24 的内存事件流落到 `data/runtime/ev
 3. `main.py`：CLI 默认使用 `JsonlEventStore.for_workdir(config.workdir)`。
 4. `tests/runtime/test_event_store.py`：验证事件写入、过滤、去重、成功 run 和失败 run 持久化。
 
+## s26 Observability
+
+```powershell
+# 运行事件分发、观测订阅者、Runtime 和安全基线测试
+D:\Language\anaconda3\envs\tacn\python.exe -m pytest tests/runtime tests/security
+```
+
+s26 新增本进程事件分发层。`LoopState.emit_event()` 仍负责生成事件和追加到 `state.events`，但如果 state 上挂了 `EventPublisher`，事件会同步发布到 `InProcessEventBus`。订阅者可以按事件类型或 `*` 通配符消费事件，当前内置 `RuntimeMetrics` 和 `RuntimeTraceRecorder` 两个观测订阅者。CLI 默认创建空 bus 和 publisher，后续审计、SSE、告警、外部消息队列都可以挂到这条分发路径上。
+
+阅读这部分代码时可以按这个顺序看：
+
+1. `agent/event_bus.py`：定义 `EventPublisher`、`InProcessEventBus`、`RuntimeMetrics` 和 `RuntimeTraceRecorder`。
+2. `agent/state.py`：`emit_event()` 在 append 后调用 publisher 分发事件。
+3. `agent/runtime.py`：执行前把 `event_publisher` 挂到当前 `LoopState`。
+4. `main.py`：CLI 默认创建 `InProcessEventBus` 和 `EventPublisher`。
+5. `tests/runtime/test_event_bus.py`：验证订阅、通配符、消费者异常隔离、metrics、trace 和 Runtime 集成。
+
 ## 学习路径
 
 ```
@@ -264,7 +284,7 @@ s25 新增 `JsonlEventStore`，把 s24 的内存事件流落到 `data/runtime/ev
 阶段四: s12 Task System → s13 Background Tasks → s14 Cron Scheduler
 阶段五: s15 Agent Teams → s16 Team Protocols → s17 Autonomous Agents → s18 Worktree Isolation
 阶段六: s19 MCP Plugin → s20 Comprehensive Agent
-企业级升级: s21 Command Sandbox → s22 Enterprise Baseline → s23 Runtime Skeleton → s24 Structured Events → s25 Persistence
+企业级升级: s21 Command Sandbox → s22 Enterprise Baseline → s23 Runtime Skeleton → s24 Structured Events → s25 Persistence → s26 Observability
 ```
 
 ## 运行环境

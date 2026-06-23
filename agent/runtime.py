@@ -14,6 +14,7 @@ from agent.events import (
     RUN_FINISHED,
     RUN_STARTED,
 )
+from agent.event_bus import EventPublisher
 from agent.event_store import RuntimeEventStore
 from agent.interceptor import InterceptorChain
 from agent.state import LoopState
@@ -35,14 +36,18 @@ class AgentRuntime:
         *,
         interceptors: InterceptorChain | None = None,
         event_store: RuntimeEventStore | None = None,
+        event_publisher: EventPublisher | None = None,
     ):
         self.loop = loop
         self.interceptors = interceptors or getattr(loop, "interceptors", InterceptorChain())
         self.loop.interceptors = self.interceptors
         self.event_store = event_store
+        self.event_publisher = event_publisher
 
     def execute(self, state: LoopState) -> list:
         """Run one turn and leave success/failure facts on LoopState."""
+        if self.event_publisher is not None:
+            state.event_publisher = self.event_publisher
         try:
             state.start()
             state.emit_event(

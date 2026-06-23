@@ -72,6 +72,10 @@ class LoopState:
     token_usage: list[dict[str, Any]] = field(default_factory=list)
     context_sources: list[dict[str, Any]] = field(default_factory=list)
 
+    # Runtime-only collaborator used by s26 event distribution. It is not part
+    # of the persisted state because subscribers live inside the current process.
+    event_publisher: Any | None = field(default=None, repr=False, compare=False)
+
     # Budget and stop controls. They are modeled here before enforcement so
     # interceptors and later runtime phases have one place to read them from.
     cancelled: bool = False
@@ -194,6 +198,8 @@ class LoopState:
         )
         data = event.to_dict()
         self.events.append(data)
+        if self.event_publisher is not None:
+            self.event_publisher.publish(data)
         return data
 
     def record_tool_event(
@@ -246,6 +252,8 @@ class LoopState:
         """Return a persistence-friendly representation of this state."""
         data: dict[str, Any] = {}
         for item in fields(self):
+            if item.name == "event_publisher":
+                continue
             value = getattr(self, item.name)
             if item.name == "error":
                 data["error"] = _error_dict(value)
@@ -256,7 +264,7 @@ class LoopState:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "LoopState":
         """Restore the serializable parts of a LoopState."""
-        allowed = {item.name for item in fields(cls)}
+        allowed = {item.name for item in fields(cls)} - {"event_publisher"}
         values = {k: v for k, v in data.items() if k in allowed and k != "error"}
         if "workdir" in values:
             values["workdir"] = Path(values["workdir"])
